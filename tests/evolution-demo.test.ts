@@ -1,0 +1,6 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,readFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {LocalStore} from '../src/local/store.js';import {runProcess} from '../src/process.js';
+test('evolution demo reproduces a structured verdict parser defect with a local-only profile',async()=>{
+ const mod=await import('../src/local/evolution-demo.js').catch(()=>({createEvolutionDemo:undefined}));assert.equal(typeof mod.createEvolutionDemo,'function','evolution demo missing');const store=new LocalStore(await mkdtemp(join(tmpdir(),'salem evolve demo '))),{project,task}=await mod.createEvolutionDemo!(store);
+ assert.equal(project.config.capabilities.edit,true);assert.equal(Object.values(project.config.capabilities).filter(Boolean).length,1);assert.equal(project.config.delivery,undefined);assert.deepEqual(task.spec.scope,['normalize.mjs']);
+ const before=await readFile(join(project.config.repoRoot,'normalize.mjs'),'utf8'),result=await runProcess({command:project.config.checks[0]!.command,cwd:project.config.repoRoot,timeoutMs:10000,maxOutputBytes:100000});assert.notEqual(result.exitCode,0);assert.match(result.stderr,/rechazar arrays/);assert.equal(await readFile(join(project.config.repoRoot,'normalize.mjs'),'utf8'),before);
+});

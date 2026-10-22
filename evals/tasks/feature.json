@@ -1,0 +1,8 @@
+{
+  "id": "FEATURE-MEAN",
+  "objective": "Añadir mean(values), export nombrado en nuevo mean.mjs: promedio de arreglo de números finitos. Arreglo vacío lanza RangeError; no mutar entrada. Solo editar mean.mjs; no Git.",
+  "scope": ["mean.mjs"],
+  "acceptance": ["mean calcula promedio sin mutar entrada y rechaza vacío; sum y stats conservan comportamiento"],
+  "acceptanceChecks": {"mean calcula promedio sin mutar entrada y rechaza vacío; sum y stats conservan comportamiento": ["acceptance", "regressions"]},
+  "references": ["AGENTS.md", "sum.mjs", "stats.mjs"]
+}

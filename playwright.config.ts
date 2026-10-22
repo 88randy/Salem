@@ -1,0 +1,2 @@
+import { defineConfig } from '@playwright/test';
+export default defineConfig({testDir:'./tests/ui', fullyParallel:false, use:{baseURL:'http://127.0.0.1:4317', headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})}, webServer:{command:'node node_modules/vite/bin/vite.js --config ui/vite.config.ts --host 127.0.0.1 --port 4317',url:'http://127.0.0.1:4317',reuseExistingServer:!process.env.CI}, reporter:'list'});

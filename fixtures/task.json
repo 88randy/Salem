@@ -1,0 +1,7 @@
+{
+  "id": "DEMO-REVIEW",
+  "objective": "Read the project instructions and summarize them without modifying files.",
+  "scope": ["Read configured project context"],
+  "acceptance": ["Return the project context confirmation in summary"],
+  "references": []
+}

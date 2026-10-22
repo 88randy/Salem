@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "projectId": "demo",
+  "repoRoot": "../fixtures/demo",
+  "contextFiles": ["AGENTS.md"],
+  "agents": {
+    "codex": { "provider": "codex", "command": ["codex", "-c", "approval_policy=\"on-request\"", "-c", "approvals_reviewer=\"auto_review\""], "ignoreUserConfig": true },
+    "claude": { "provider": "claude", "command": ["claude"] }
+  },
+  "checks": [],
+  "capabilities": { "edit": false, "commit": false, "pull_request": false, "merge": false, "deploy": false },
+  "budgets": { "stageTimeoutMs": 180000, "maxOutputBytes": 2000000 }
+}

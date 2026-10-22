@@ -1,0 +1,8 @@
+{
+  "id": "BUG-SUM",
+  "objective": "Corregir sum(a,b) para sumar números finitos. Solo editar sum.mjs. El controlador ejecuta aceptación y entrega; no usar Git.",
+  "scope": ["sum.mjs"],
+  "acceptance": ["sum suma positivos, negativos, cero y decimales sin alterar stats"],
+  "acceptanceChecks": {"sum suma positivos, negativos, cero y decimales sin alterar stats": ["acceptance", "regressions"]},
+  "references": ["AGENTS.md", "sum.mjs", "stats.mjs"]
+}

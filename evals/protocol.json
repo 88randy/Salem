@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "demo-exploratory-v1",
+  "cases": ["bug", "feature", "refactor"],
+  "budgets": {"stageTimeoutMs": 180000, "runTimeoutMs": 600000, "maxAttempts": 6, "maxReportedTokens": 500000, "maxOutputBytes": 2000000},
+  "order": {"claude": {"bug": ["direct","framework"],"feature": ["framework","direct"],"refactor": ["direct","framework"]}, "codex": {"bug": ["framework","direct"],"feature": ["direct","framework"],"refactor": ["framework","direct"]}},
+  "replicates": 1,
+  "delivery": "local_commit",
+  "retriesOfFailedTrials": 0,
+  "modelPolicy": "same resolved executable and config per provider; CLI default, unknown effective model stays unknown",
+  "interpretation": "exploratory descriptive comparison, no statistical or causal savings claim"
+}

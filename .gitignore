@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.artifacts/
+.local/
+.superpowers/
+web-dist/
+test-results/
+playwright-report/
+.env*
+!.env.example

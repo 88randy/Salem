@@ -1,0 +1,22 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { supervisorFixture, git } from "./supervisor-fixture.js";
+import { runTask, resumeRun } from "../src/runner.js";
+test("native supervisor completes accepted code with a persistent local delivery receipt and no stage replay", async () => {
+  const f=await supervisorFixture();f.config.supervisor!.runTimeoutMs=240000;
+  f.config.capabilities.commit=true;
+  f.config.delivery={branchPrefix:"feature/agent-",recovery:"query_only",commit:{message:"fix: entrega demo",author:{name:"Demo",email:"demo@example.invalid"}}};
+  f.config.checks=[{id:"exists",required:true,command:[process.execPath,"-e","require('node:assert/strict').equal(require('node:fs').readFileSync('answer.txt','utf8'),'implemented\\n')"]}];
+  f.task.acceptanceChecks={"answer.txt exists":["exists"]};
+  const first=await runTask(f.task,f.config,{stateDir:f.stateDir});
+  assert.equal(first.status,"completed");assert.equal(first.acceptance?.accepted,true);
+  assert.equal(first.delivery?.verdict,"success");assert.ok(first.deliveryJournal?.commitSha);
+  assert.equal(await git(f.config.repoRoot,"show",`${first.deliveryJournal.commitSha}:answer.txt`),"implemented");
+  const trace=await readFile(f.trace,"utf8");
+  const resumed=await resumeRun(first.id,f.config,{stateDir:f.stateDir});
+  assert.equal(resumed.status,"completed");assert.equal(await readFile(f.trace,"utf8"),trace);
+  assert.equal(await git(f.config.repoRoot,"rev-parse","HEAD"),first.expected.head);
+  assert.equal(await readFile(join(f.config.repoRoot,"answer.txt"),"utf8"),"implemented\n");
+});

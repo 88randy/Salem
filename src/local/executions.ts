@@ -1,0 +1,172 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, readdir, realpath, lstat, open, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { isInside } from "../config.js";
+import type { ProjectConfig, RunState } from "../contracts.js";
+import { runTask, resumeRun, runFingerprint, type RunnerOptions } from "../runner.js";
+import { summarizeRun } from "../metrics.js";
+import { StateStore } from "../state-store.js";
+import { runProcess, redact } from "../process.js";
+import type { ExecutionDetail, ExecutionRecord, Provider } from "./contracts.js";
+import type { LocalStore } from "./store.js";
+import { localGit } from "./git.js";
+import { localError, localText, uuid } from "./validation.js";
+
+const activeStatuses=new Set(["preparing","running"]);
+function providers(e:ExecutionRecord):Provider[]{return [...new Set(Object.values(e.project.config.supervisor!.roles).map(id=>e.project.config.agents[id]!.provider))];}
+export class ExecutionManager {
+ private active=new Map<string,{controller:AbortController;promise:Promise<void>;providers:Provider[]}>();
+ private reservation:Promise<unknown>=Promise.resolve();
+ private timer:NodeJS.Timeout|undefined;
+ private pumping=false;private closed=false;
+ constructor(readonly store:LocalStore,private options:{autoStart?:boolean;canStart?:(provider:Provider)=>boolean;additionalActive?:()=>number}={}){}
+ activeCount():number{return this.active.size;}
+ async initialize():Promise<void>{
+  const state=await this.store.readState();
+  for(const e of state.executions)if(activeStatuses.has(e.status))await this.store.patchExecution(e.id,{status:"interrupted",reason:"Salem se cerró antes de confirmar el resultado. Reanuda para reconciliar el checkpoint; no se repiten acciones automáticamente."});
+  if(this.options.autoStart!==false){this.timer=setInterval(()=>this.wake(),1000);this.timer.unref();this.wake();}
+ }
+ private serialized<T>(fn:()=>Promise<T>):Promise<T>{const next=this.reservation.then(fn);this.reservation=next.catch(()=>{});return next;}
+ isBusy(provider:Provider):boolean{return [...this.active.values()].some(v=>v.providers.includes(provider));}
+ async start(taskId:string,key:string,baseExecutionId?:string):Promise<ExecutionRecord>{return this.serialized(async()=>{
+  if(this.closed)throw localError("Salem se está cerrando.",409);
+  uuid(taskId);localText(key,"clave de solicitud",120);
+  const state=await this.store.readState(),same=state.executions.find(e=>e.requestKey===key);
+  if(same){if(same.taskId!==taskId||same.baseExecutionId!==baseExecutionId)throw localError("La clave ya pertenece a otra solicitud.",409);return same;}
+  const task=state.tasks.find(t=>t.id===taskId&&!t.archived),project=state.projects.find(p=>p.id===task?.projectId&&!p.archived);
+  if(!task||!project)throw localError("Selecciona un proyecto y una tarea activos.",404);
+  if(task.origin&&(task.origin.projectRevision!==project.revision||baseExecutionId))throw localError("El perfil del proyecto cambió o la base sustituye la revisión investigada. Crea un nuevo objetivo con el contexto actual.",409);
+  const id=randomUUID(),execution:ExecutionRecord={id,revision:1,taskId,projectId:project.id,requestKey:key,createdAt:Date.now(),updatedAt:Date.now(),finishedAt:null,
+   status:"queued",reason:null,project:structuredClone(project),task:structuredClone(task.spec),workspace:null,sourceSha:null,runId:null,
+   stateDir:join(this.store.root,"executions",id,"runs"),setupMs:null,preparationLogs:[],...(baseExecutionId?{baseExecutionId:uuid(baseExecutionId)}:{})};
+  if(task.origin)execution.project.baseRef=task.origin.sourceSha;
+  if(providers(execution).some(p=>this.options.canStart?.(p)===false))throw localError("Espera a que termine la conexión de la cuenta antes de ejecutar.",409);
+  if(baseExecutionId)await this.baseExecution(execution);
+  await this.store.saveExecution(execution);if(this.options.autoStart!==false)this.wake();return execution;
+ });}
+ async cancel(id:string):Promise<ExecutionRecord>{return this.serialized(async()=>{
+  const e=await this.store.findExecution(id),running=this.active.get(id);
+  if(e.status==="completed")return e;
+  if(running){running.controller.abort();return this.store.patchExecution(id,{reason:"Cancelación solicitada; esperando el cierre de los procesos propios."});}
+  if(e.status==="queued")return this.store.patchExecution(id,{status:"cancelled",reason:"Cancelada antes de iniciar.",finishedAt:Date.now()});
+  return e;
+ });}
+ async resume(id:string):Promise<ExecutionRecord>{return this.serialized(async()=>{
+  const e=await this.store.findExecution(id);if(this.active.has(id)||e.status==="completed"||e.status==="queued")return e;
+  const run=await this.readRun(e,true).catch(()=>null);
+  if(!run||!e.workspace)return this.store.patchExecution(id,{status:"blocked",reason:"No hay un checkpoint nativo verificable para reanudar. Conserva la evidencia; puedes repetir como una nueva ejecución aislada.",finishedAt:Date.now()});
+  if(providers(e).some(p=>this.options.canStart?.(p)===false))throw localError("Espera a que termine la conexión de la cuenta.",409);
+  const updated=await this.store.patchExecution(id,{runId:run.id,status:"queued",reason:"Reanudación solicitada.",finishedAt:null});
+  if(this.options.autoStart!==false)this.wake();return updated;
+ });}
+ wake():void{if(this.closed||this.pumping)return;this.pumping=true;void this.pump().catch(()=>{}).finally(()=>{this.pumping=false;});}
+ private async pump():Promise<void>{
+  const state=await this.store.readState();
+  for(const candidate of state.executions){
+   if(this.closed)break;
+   await this.serialized(async()=>{
+    const current=await this.store.readState(),e=current.executions.find(item=>item.id===candidate.id);
+    if(this.closed||this.active.size+(this.options.additionalActive?.()??0)>=current.settings.maxConcurrentRuns||!e||e.status!=="queued"||this.active.has(e.id)||providers(e).some(p=>this.options.canStart?.(p)===false))return;
+    const controller=new AbortController();
+    // Reserve synchronously with the account predicate; execution starts only
+    // after the active reservation is visible to cancellation and account changes.
+    const promise=Promise.resolve().then(()=>this.execute(e,controller)).finally(()=>{this.active.delete(e.id);this.wake();});
+    this.active.set(e.id,{controller,promise,providers:providers(e)});
+   });
+  }
+ }
+ private async baseExecution(e:ExecutionRecord):Promise<{root:string;sha:string}|null>{
+  if(!e.baseExecutionId)return null;
+  const previous=await this.store.findExecution(e.baseExecutionId);
+  if(previous.projectId!==e.projectId||previous.status!=="completed"||!previous.workspace)throw localError("La base debe ser una entrega aceptada del mismo proyecto.");
+  const run=await this.readRun(previous),sha=run?.deliveryJournal?.releaseSha??run?.deliveryJournal?.commitSha;
+  if(!run||!summarizeRun(run).accepted||!sha)throw localError("La entrega seleccionada no tiene un SHA aceptado verificable.");
+  await this.ownedWorkspace(previous.workspace,previous.id);return {root:previous.workspace,sha};
+ }
+ private async ownedPath(...parts:string[]):Promise<string>{
+  const root=await realpath(this.store.root);let cursor=root;
+  for(const part of parts){cursor=join(cursor,part);try{
+   const info=await lstat(cursor);
+   if(info.isSymbolicLink()||await realpath(cursor)!==cursor)throw localError("La ruta de ejecución contiene un enlace fuera del espacio permitido de Salem.",403);
+  }catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")break;throw error;}}
+  return join(root,...parts);
+ }
+ private async ownedWorkspace(path:string,id:string):Promise<string>{const expected=await this.ownedPath("workspaces",uuid(id)),actual=await realpath(path);if(actual!==expected)throw localError("Ruta de ejecución fuera del espacio de Salem.");return actual;}
+ private async prepare(e:ExecutionRecord,signal:AbortSignal):Promise<ExecutionRecord>{
+  const started=Date.now(),artifactRoot=await this.ownedPath("executions",e.id),leaseDir=join(artifactRoot,"setup-leases");
+  await mkdir(artifactRoot,{recursive:true});await mkdir(await this.ownedPath("workspaces"),{recursive:true});
+  const base=await this.baseExecution(e),source=base?.root??await realpath(e.project.config.repoRoot);
+  const top=await realpath(await localGit(source,["rev-parse","--show-toplevel"],this.store.root,{signal,leaseDir}));
+  if(top!==source)throw localError("El proyecto debe apuntar a la carpeta raíz de un repositorio Git.");
+  const sha=await localGit(source,["rev-parse","--verify","--end-of-options",`${base?.sha??e.project.baseRef}^{commit}`],this.store.root,{signal,leaseDir});
+  if(!/^[a-f0-9]{40,64}$/.test(sha))throw localError("No se pudo resolver el SHA base.");
+  const workspace=await this.ownedPath("workspaces",e.id);
+  e=await this.store.patchExecution(e.id,{workspace,sourceSha:sha});signal.throwIfAborted();
+  await localGit(source,["clone","--local","--no-hardlinks","--dissociate","--no-checkout","--template=","--origin","salem-source","--",source,workspace],this.store.root,{signal,leaseDir});
+  await localGit(workspace,["config","--local","core.hooksPath",join(this.store.root,"empty-hooks")],this.store.root,{signal,leaseDir});
+  await localGit(workspace,["config","--local","core.fsmonitor","false"],this.store.root,{signal,leaseDir});
+  const filters=await localGit(workspace,["config","--name-only","--get-regexp","^filter\\..*\\.(process|smudge|clean|required)$"],this.store.root,{signal,leaseDir,allowMissing:true});
+  for(const key of filters.split(/\r?\n/).filter(Boolean)){
+   if(!/^filter\.[A-Za-z0-9._/-]+\.(?:process|smudge|clean|required)$/.test(key))throw localError("Filtro Git no compatible con una copia aislada segura.");
+   await localGit(workspace,["config","--local",key,key.endsWith(".required")?"false":""],this.store.root,{signal,leaseDir});
+  }
+  await localGit(workspace,["checkout","--detach",sha],this.store.root,{signal,leaseDir});
+  const remote=e.project.config.delivery?.github;
+  if(remote){const names=(await localGit(workspace,["remote"],this.store.root,{signal,leaseDir})).split(/\r?\n/);
+   await localGit(workspace,names.includes(remote.remote)?["remote","set-url",remote.remote,remote.remoteUrl]:["remote","add",remote.remote,remote.remoteUrl],this.store.root,{signal,leaseDir});}
+  for(const [i,command] of e.project.preparation.entries()){
+   signal.throwIfAborted();const result=await runProcess({command,cwd:workspace,timeoutMs:e.project.config.budgets.stageTimeoutMs,maxOutputBytes:e.project.config.budgets.maxOutputBytes,signal,leaseDir});
+   const file=`preparation-${i+1}.log`;await writeFile(join(artifactRoot,file),redact(`${result.stdout}\n${result.stderr}\n${result.error??""}`),{mode:0o600});
+   e=await this.store.patchExecution(e.id,{preparationLogs:[...e.preparationLogs,file]});
+   if(result.status!=="exited"||result.exitCode!==0)throw localError(`Preparación ${i+1} fallida (${result.status}, salida ${result.exitCode??"desconocida"}). Consulta su log.`);
+  }
+  return this.store.patchExecution(e.id,{setupMs:Date.now()-started});
+ }
+ private config(e:ExecutionRecord):ProjectConfig{if(!e.workspace)throw localError("La copia aislada no está preparada.");return {...structuredClone(e.project.config),repoRoot:e.workspace};}
+ private async execute(initial:ExecutionRecord,controller:AbortController):Promise<void>{
+  let e=initial;
+  try{
+   if(!e.runId){await this.store.patchExecution(e.id,{status:"preparing",reason:null});controller.signal.throwIfAborted();e=await this.prepare(e,controller.signal);}
+   else await this.ownedWorkspace(e.workspace!,e.id);
+   controller.signal.throwIfAborted();await this.store.patchExecution(e.id,{status:"running",reason:null});
+   const localOnly=!e.project.config.delivery&&!["commit","pull_request","merge","deploy"].some(capability=>e.project.config.capabilities[capability as keyof ProjectConfig["capabilities"]]);
+   const options:RunnerOptions={stateDir:e.stateDir,signal:controller.signal,onCheckpoint:async(run:RunState)=>{await this.store.patchExecution(e.id,{runId:run.id,status:"running",reason:run.reason});},...(localOnly?{gates:{deliver:async(run:RunState)=>({id:randomUUID(),fingerprint:runFingerprint(run),verdict:run.acceptance?.accepted===true?"success" as const:"blocked" as const,evidenceRefs:(run.checks??[]).map(check=>check.artifactDir),summary:run.acceptance?.accepted===true?"Entrega local validada: código y diff conservados en la copia aislada, sin commit ni publicación.":"La entrega local requiere checks reales y revisión aceptada."})}}:{})};
+   const result=e.runId?await resumeRun(e.runId,this.config(e),options):await runTask(e.task,this.config(e),options);
+   await this.store.patchExecution(e.id,{runId:result.id,status:result.status==="completed"?"completed":result.status==="cancelled"?"cancelled":result.status==="failed"?"failed":"blocked",reason:result.reason,finishedAt:Date.now()});
+  }catch(error){await this.store.patchExecution(e.id,{status:controller.signal.aborted?"cancelled":"failed",reason:controller.signal.aborted?"Ejecución cancelada; se conservaron los resultados confirmados.":`Preparación o ejecución fallida: ${redact((error as Error).message)}`,finishedAt:Date.now()});}
+ }
+ private async readRun(e:ExecutionRecord,discover=false):Promise<RunState|null>{
+  const stateDir=await this.ownedPath("executions",uuid(e.id),"runs");
+  if(resolve(e.stateDir)!==join(this.store.root,"executions",e.id,"runs"))throw localError("Checkpoint fuera del espacio permitido.",403);
+  let ids=e.runId?[e.runId]:[];
+  if(!ids.length&&discover){try{ids=(await readdir(stateDir)).filter(id=>/^[a-f0-9-]{36}$/.test(id));}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}}
+  if(ids.length!==1)return null;
+  await this.ownedPath("executions",e.id,"runs",uuid(ids[0]),"state.json");
+  const run=await new StateStore(stateDir).read(ids[0]!) as unknown as RunState;
+  if(run.projectId!==e.project.config.projectId||run.task.id!==e.task.id||run.expected.root!==e.workspace)throw localError("El checkpoint no corresponde a esta ejecución.");
+  return run;
+ }
+ async detail(id:string):Promise<ExecutionDetail>{
+  const execution=await this.store.findExecution(id),run=await this.readRun(execution).catch(()=>null);
+  let diff="";if(execution.workspace){try{await this.ownedWorkspace(execution.workspace,id);diff=await localGit(execution.workspace,["diff","--no-ext-diff","--no-textconv",execution.sourceSha??"HEAD","--"],this.store.root);}catch(error){diff=`No se pudo obtener el diff: ${redact((error as Error).message)}`;}}
+  const root=await this.ownedPath("executions",uuid(id)),artifacts:{path:string;bytes:number}[]=[];
+  const walk=async(dir:string):Promise<void>=>{let entries;try{entries=await readdir(dir,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
+   for(const entry of entries){if(artifacts.length>=500)break;const file=join(dir,entry.name);if(entry.isSymbolicLink())continue;if(entry.isDirectory())await walk(file);else if(entry.isFile()&&/\.(?:json|log|txt|md)$/.test(entry.name))artifacts.push({path:relative(root,file).replaceAll("\\","/"),bytes:(await lstat(file)).size});}};
+  const metrics=run?summarizeRun(run):null;
+  if(metrics){
+   metrics.timing.setupMs=execution.setupMs;
+   metrics.timing.totalMs=execution.setupMs!==null&&metrics.timing.wallComplete&&execution.finishedAt!==null&&["completed","failed","blocked","cancelled"].includes(execution.status)?execution.setupMs+metrics.timing.wallMs:null;
+   metrics.limitations.push("Local total is measured preparation plus core wall time, including pauses between resumed invocations; queue time is excluded.");
+  }
+  await walk(root);return {execution,run,metrics,diff,artifacts};
+ }
+ async artifact(id:string,path:string,offset=0):Promise<{text:string;truncated:boolean;nextOffset:number}>{
+  await this.store.findExecution(id);localText(path,"ruta del artefacto",2000);
+  if(isAbsolute(path)||path.includes("\\")||!Number.isSafeInteger(offset)||offset<0)throw localError("Ruta o desplazamiento de artefacto inválido.");
+  const root=await this.ownedPath("executions",uuid(id)),target=resolve(root,path);
+  if(!isInside(root,target))throw localError("La ruta del artefacto está fuera del espacio permitido.",403);
+  const actual=await realpath(target);if(!isInside(root,actual)||!(/\.(?:json|log|txt|md)$/.test(actual)))throw localError("Artefacto fuera del espacio permitido.",403);
+  const handle=await open(actual,"r");try{const info=await handle.stat();if(!info.isFile())throw localError("Artefacto inválido.");const buffer=Buffer.alloc(65536),{bytesRead}=await handle.read(buffer,0,buffer.length,offset);return {text:redact(buffer.subarray(0,bytesRead).toString("utf8")),truncated:offset+bytesRead<info.size,nextOffset:offset+bytesRead};}finally{await handle.close();}
+ }
+ async shutdown():Promise<void>{this.closed=true;if(this.timer)clearInterval(this.timer);for(const item of this.active.values())item.controller.abort();await Promise.allSettled([...this.active.values()].map(v=>v.promise));}
+}

@@ -1,0 +1,8 @@
+{
+  "id": "REFACTOR-STATS",
+  "objective": "Refactorizar stats(values) de stats.mjs para calcular total/min/max en un solo recorrido y conservar count/total/min/max y caso vacío. No mutar entrada. La aceptación observa lecturas de índices numéricos y exige a lo sumo N+2 lecturas para N elementos. Solo editar stats.mjs; no Git.",
+  "scope": ["stats.mjs"],
+  "acceptance": ["stats preserva resultados y entrada usando un solo recorrido; sum sigue correcto"],
+  "acceptanceChecks": {"stats preserva resultados y entrada usando un solo recorrido; sum sigue correcto": ["acceptance", "regressions"]},
+  "references": ["AGENTS.md", "sum.mjs", "stats.mjs"]
+}
