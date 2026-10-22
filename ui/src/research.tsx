@@ -74,8 +74,8 @@ function defaultAgent(project?: ProjectRecord) {
   return project?.config.supervisor?.roles.define || Object.keys(project?.config.agents || {})[0] || '';
 }
 
-export function ObjectivesPage({ state, onChanged, onError, onDirty, onTaskCreated, onAddProject }: {
-  state: LocalState; onChanged: () => Promise<void>; onError: (error: unknown) => void;
+export function ObjectivesPage({ initialGoalId, state, onChanged, onError, onDirty, onTaskCreated, onAddProject }: {
+  initialGoalId?: string | null; state: LocalState; onChanged: () => Promise<void>; onError: (error: unknown) => void;
   onDirty: (dirty: boolean) => void; onTaskCreated: (task: Pick<TaskRecord, 'id' | 'projectId'>) => void; onAddProject: () => void;
 }) {
   const projects = state.projects.filter(project => !project.archived);
@@ -84,7 +84,7 @@ export function ObjectivesPage({ state, onChanged, onError, onDirty, onTaskCreat
   const project = projects.find(item => item.id === projectId);
   const [agentId, setAgentId] = useState(() => defaultAgent(projects[0]));
   const [objective, setObjective] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialGoalId||null);
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   const request = useRef({ signature: '', key: '' });

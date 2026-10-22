@@ -1,0 +1,92 @@
+import {useEffect,useRef,useState,type ReactNode} from 'react';
+import {Activity,ArrowUp,Check,ChevronRight,Compass,FolderKanban,Home,Layers,ListTodo,Monitor,PanelLeftClose,PanelLeftOpen,Play,Plus,Search,Settings,UserRound} from 'lucide-react';
+import type {AccountView,ExecutionRecord,LocalState} from '../../src/local/contracts';
+import type {GoalRecord} from '../../src/local/research-contracts';
+import {Modal,Select} from './fields';
+import {api} from './api';
+
+export type Page='Inicio'|'Proyectos'|'Objetivos'|'Tareas'|'Ejecuciones'|'Evolución'|'Cuentas'|'Ajustes';
+const navigation=[{name:'Inicio',icon:Home},{name:'Proyectos',icon:FolderKanban},{name:'Objetivos',icon:Compass},{name:'Tareas',icon:ListTodo},{name:'Ejecuciones',icon:Play},{name:'Evolución',icon:Layers},{name:'Cuentas',icon:UserRound},{name:'Ajustes',icon:Settings}] as const;
+const names:Record<string,string>={queued:'En cola',preparing:'Preparando',running:'En ejecución',interrupted:'Interrumpida',completed:'Terminada',failed:'Fallida',blocked:'Bloqueada',cancelled:'Cancelada'};
+const active=(e:ExecutionRecord)=>['queued','preparing','running'].includes(e.status);
+const recent=(state?:LocalState)=>[...(state?.executions||[])].sort((a,b)=>b.createdAt-a.createdAt);
+const date=(v:number)=>new Date(v).toLocaleString('es-MX',{dateStyle:'medium',timeStyle:'short'});
+type WorkItem={id:string;kind:'execution'|'goal'|'evolution';title:string;summary:string;project:string;status:string;label:string;reason:string|null;createdAt:number;active:boolean};
+function workItems(state?:LocalState):WorkItem[]{
+ const goals:Record<string,string>={queued:'En cola',investigating:'Investigando',ready:'Plan listo',needs_input:'Necesita tu respuesta',materialized:'Tarea creada',blocked:'Bloqueado',failed:'Fallido',cancelled:'Cancelado',interrupted:'Interrumpido'};
+ const evolutions:Record<string,string>={queued:'En cola',baseline:'Reproduciendo fallo',planning:'Investigando',candidate:'Proponiendo código',checking:'Probando candidata',reviewing:'Revisión independiente',improved:'Mejora comprobada',no_improvement:'Sin mejora comprobada',blocked:'Bloqueada',failed:'Fallida',cancelled:'Cancelada',interrupted:'Interrumpida'};
+ const promotions:Record<string,string>={queued:'En cola para aplicar',preparing:'Preparando respaldo',applying:'Aplicando mejora',verifying:'Verificando aplicación',rolling_back:'Restaurando respaldo',applied:'Mejora aplicada',rolled_back:'Mejora revertida',conflict:'Conflicto de reversión',blocked:'Aplicación bloqueada'};
+ return [
+  ...(state?.executions||[]).map(e=>({id:e.id,kind:'execution' as const,title:e.task.id,summary:e.task.objective,project:e.project.name,status:e.status,label:names[e.status]||e.status,reason:e.reason,createdAt:e.createdAt,active:active(e)})),
+  ...(state?.goals||[]).map(g=>({id:g.id,kind:'goal' as const,title:g.objective,summary:'Investigación de objetivo',project:g.project.name,status:g.status,label:goals[g.status]||g.status,reason:g.reason,createdAt:g.createdAt,active:['queued','investigating'].includes(g.status)})),
+  ...(state?.evolutions||[]).map(e=>({id:e.id,kind:'evolution' as const,title:e.task.id,summary:e.task.objective,project:e.project.name,status:e.promotion?.status||e.status,label:e.promotion?promotions[e.promotion.status]||e.promotion.status:evolutions[e.status]||e.status,reason:e.promotion?.reason||e.reason,createdAt:e.updatedAt||e.createdAt,active:['queued','baseline','planning','candidate','checking','reviewing'].includes(e.status)||!!e.promotion&&['queued','preparing','applying','verifying','rolling_back'].includes(e.promotion.status)}))
+ ].sort((a,b)=>Number(b.active)-Number(a.active)||b.createdAt-a.createdAt);
+}
+
+export function Cat({className=''}:{className?:string}){return <svg className={`cat ${className}`} viewBox="0 0 40 43" fill="none" aria-hidden="true"><path d="M5 24 4 4 15 12c3-1 7-1 10 0L36 4l-1 20c0 10-6 15-15 15S5 34 5 24Z" fill="currentColor"/><path d="m9 11 1 9 6-4M31 11l-1 9-6-4" fill="#aa95c3"/><path d="M11 24h5m8 0h5" stroke="#f4f1fa" strokeWidth="2.5" strokeLinecap="round"/><path d="m18 29 2 2 2-2" stroke="#c1afd4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>;}
+
+function readPreference(key:string,fallback:string){try{return localStorage.getItem(`salem.ui.${key}`)||fallback;}catch{return fallback;}}
+function writePreference(key:string,value:string){try{localStorage.setItem(`salem.ui.${key}`,value);}catch{/* Session preferences still work when storage is unavailable. */}}
+function setTheme(theme:string){document.documentElement.dataset.theme=theme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):theme;}
+export function useAppearance(){
+ useEffect(()=>{const theme=readPreference('theme','light');setTheme(theme);const media=matchMedia('(prefers-color-scheme: dark)');const update=()=>{if(readPreference('theme','light')==='system')setTheme('system');};media.addEventListener('change',update);return()=>media.removeEventListener('change',update);},[]);
+}
+export function Appearance(){
+ const [theme,updateTheme]=useState(()=>readPreference('theme','light'));
+ return <section className="appearance-section" id="appearance"><h2>Apariencia</h2><p className="muted">Personaliza este navegador. Se aplica al momento.</p><Select label="Tema de la interfaz" value={theme} onChange={value=>{updateTheme(value);writePreference('theme',value);setTheme(value);}} options={[{value:'light',label:'Claro'},{value:'dark',label:'Oscuro'},{value:'system',label:'Según el sistema'}]}/></section>;
+}
+
+type ShellProps={page:Page;state?:LocalState;executionId:string|null;children:ReactNode;onNavigate:(page:Page)=>void;onProject:(id:string)=>void;onExecution:(id:string)=>void;onGoal:(id:string)=>void;onEvolution:(id:string)=>void;onNew:()=>void;canLeave:()=>boolean};
+export function WorkspaceShell({page,state,executionId,children,onNavigate,onProject,onExecution,onGoal,onEvolution,onNew,canLeave}:ShellProps){
+ useAppearance();
+ const [collapsed,setCollapsed]=useState(()=>readPreference('collapsed','false')==='true');
+ const [searching,setSearching]=useState(false);const [activity,setActivity]=useState(false);
+ const projects=state?.projects.filter(p=>!p.archived)||[];const executions=recent(state);const work=workItems(state);const running=work.filter(w=>w.active);
+ const current=state?.executions.find(e=>e.id===executionId);
+ useEffect(()=>{const handler=(e:KeyboardEvent)=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();if(!document.querySelector('dialog[open]'))setSearching(true);}};window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler);},[]);
+ const goExecution=(id:string)=>{if(!canLeave())return;setActivity(false);setSearching(false);onExecution(id);};
+ const goProject=(id:string)=>{if(!canLeave())return;setSearching(false);onProject(id);};
+ const goWork=(item:WorkItem)=>{if(!canLeave())return;setActivity(false);setSearching(false);if(item.kind==='goal')onGoal(item.id);else if(item.kind==='evolution')onEvolution(item.id);else onExecution(item.id);};
+ return <div className={`shell workspace-shell ${collapsed?'rail-collapsed':''}`}>
+  <aside className="sidebar"><div className="brand"><Cat/><strong>Salem</strong><button className="icon-button collapse-rail" aria-label={collapsed?'Expandir navegación':'Contraer navegación'} aria-expanded={!collapsed} onClick={()=>{setCollapsed(!collapsed);writePreference('collapsed',String(!collapsed));}}>{collapsed?<PanelLeftOpen size={16}/>:<PanelLeftClose size={16}/>}</button></div>
+   <button className="new-work" onClick={onNew}><Plus size={17}/><span>Nuevo trabajo</span></button>
+   <button className="nav-button search-nav" aria-label="Buscar" onClick={()=>setSearching(true)} title="Buscar (Ctrl+K)"><Search size={17}/><span>Buscar</span><kbd>Ctrl K</kbd></button>
+   <nav aria-label="Navegación principal">{navigation.map(({name,icon:Icon})=><button key={name} className={`nav-button ${page===name?'active':''}`} aria-label={name} aria-current={page===name?'page':undefined} title={collapsed?name:undefined} onClick={()=>onNavigate(name)}><Icon size={17}/><span>{name}</span></button>)}</nav>
+   <div className="sidebar-history"><div className="rail-section-title">Tus proyectos</div>{projects.length?projects.slice(0,8).map(p=><button className="rail-item" key={p.id} onClick={()=>goProject(p.id)} title={p.name} aria-label={`Abrir proyecto ${p.name}`}><FolderKanban size={15}/><span>{p.name}</span></button>):<p className="rail-empty">Incorpora un repositorio para empezar.</p>}
+    {executions.length>0&&<><div className="rail-section-title">Recientes</div>{executions.slice(0,5).map(e=><button className="rail-item" key={e.id} onClick={()=>goExecution(e.id)} title={e.task.objective}><span className={`state-dot ${e.status}`}/><span>{e.task.objective||e.task.id}</span></button>)}</>}
+   </div><div className="sidebar-footer"><Monitor size={15}/><div><strong>En esta computadora</strong><span>Tu trabajo, tus cuentas.</span></div></div>
+  </aside>
+  <div className="workspace-main"><header className="workspace-topbar"><div className="workspace-breadcrumb"><span>{current?.project.name||'Tu espacio'}</span><ChevronRight size={13}/><strong>{current?.task.id||page}</strong></div><div className="topbar-actions"><button className="icon-button" aria-label="Abrir búsqueda" onClick={()=>setSearching(true)}><Search size={16}/></button><button className="quiet small activity-trigger" aria-label="Ver actividad" onClick={()=>setActivity(true)}><Activity size={16}/><span>Actividad</span>{running.length>0&&<span className="activity-count">{running.length}</span>}</button></div></header><main className={`main ${page==='Inicio'?'home-main':''} ${executionId?'execution-main':''}`}>{children}</main></div>
+  {searching&&<SearchDialog state={state} work={work} onClose={()=>setSearching(false)} onProject={goProject} onWork={goWork}/>}
+  {activity&&<Modal title="Actividad de Salem" onClose={()=>setActivity(false)}><div className="dialog-body activity-body"><p className="muted">{running.length?`${running.length} procesos en curso. Puedes seguir su avance desde aquí.`:'No hay procesos en curso.'}</p>{work.length?<div className="activity-list">{work.map(item=><button className="activity-entry" key={`${item.kind}-${item.id}`} onClick={()=>goWork(item)}><span className="activity-entry-top"><strong>{item.title}</strong><span className={`status ${item.status}`}>{item.label}</span></span><span>{item.summary}</span><small>{item.project} · {({execution:'Ejecución',goal:'Objetivo',evolution:'Evolución'})[item.kind]} · {date(item.createdAt)}</small>{item.reason&&<span className="activity-reason">{item.reason}</span>}</button>)}</div>:<div className="empty"><Play size={23}/><h3>El trabajo aparecerá aquí</h3><p>Inicia un objetivo o una tarea para seguir sus etapas y resultados.</p></div>}</div></Modal>}
+ </div>;
+}
+
+function SearchDialog({state,work,onClose,onProject,onWork}:{state?:LocalState;work:WorkItem[];onClose:()=>void;onProject:(id:string)=>void;onWork:(item:WorkItem)=>void}){
+ const [query,setQuery]=useState('');const normalized=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();const q=normalized(query.trim());
+ const projects=state?.projects.filter(p=>!p.archived&&normalized(p.name+' '+p.config.repoRoot).includes(q))||[];
+ const results=work.filter(w=>normalized(w.title+' '+w.summary+' '+w.project+' '+(w.reason||'')).includes(q));
+ const tasks=state?.tasks.filter(t=>!t.archived&&normalized(t.spec.id+' '+t.spec.objective).includes(q))||[];
+ return <Modal title="Buscar en Salem" onClose={onClose}><div className="dialog-body search-body"><label className="search-field"><Search size={18}/><input type="search" aria-label="Buscar proyectos y trabajo" autoFocus placeholder="Busca un proyecto, tarea o error…" value={query} onChange={e=>setQuery(e.target.value)}/></label>
+  <div className="search-results">{projects.length>0&&<><h3>Proyectos</h3>{projects.slice(0,10).map(p=><button className="search-result" key={p.id} onClick={()=>onProject(p.id)}><FolderKanban size={18}/><span><strong>{p.name}</strong><small>{p.config.repoRoot}</small></span><ChevronRight size={15}/></button>)}</>}{tasks.length>0&&<><h3>Tareas</h3>{tasks.slice(0,10).map(t=><button className="search-result" key={t.id} onClick={()=>onProject(t.projectId)}><ListTodo size={17}/><span><strong>{t.spec.id} · {t.spec.objective}</strong><small>Abrir tareas del proyecto</small></span><ChevronRight size={15}/></button>)}</>}{results.length>0&&<><h3>Objetivos, ejecuciones y mejoras</h3>{results.slice(0,20).map(w=><button className="search-result" key={`${w.kind}-${w.id}`} onClick={()=>onWork(w)}><span className={`state-dot ${w.status}`}/><span><strong>{w.title}{w.kind!=='goal'?` · ${w.summary}`:''}</strong><small>{w.project} · {w.label}</small></span><ChevronRight size={15}/></button>)}</>}{!projects.length&&!results.length&&!tasks.length&&<p className="muted">No hay resultados para esta búsqueda.</p>}</div>
+ </div></Modal>;
+}
+
+export function HomePage({state,accounts,onAddProject,onManualProject,onDemo,onTask,onStart,onExecution,onDirty,onError}:{state:LocalState;accounts:AccountView[];onAddProject:()=>void;onManualProject:()=>void;onDemo:()=>void;onTask:()=>void;onStart:(goal:GoalRecord)=>Promise<void>;onExecution:(id:string)=>void;onDirty:(dirty:boolean)=>void;onError:(e:unknown)=>void}){
+ const projects=state.projects.filter(p=>!p.archived);const [projectId,setProjectId]=useState(()=>projects[0]?.id||'');const [objective,setObjective]=useState('');const [busy,setBusy]=useState(false);const request=useRef({signature:'',key:''});
+ const project=projects.find(p=>p.id===projectId)||projects[0];const agentId=project?.config.supervisor?.roles.define||Object.keys(project?.config.agents||{})[0]||'';
+ const agent=project?.config.agents[agentId];const executions=recent(state).slice(0,4);const mounted=useRef(true);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+ useEffect(()=>{onDirty(Boolean(objective.trim()));},[objective,onDirty]);useEffect(()=>()=>onDirty(false),[onDirty]);
+ async function start(){if(!project||!agentId||!objective.trim()||busy)return;const input={projectId:project.id,objective:objective.trim(),agentId};const signature=JSON.stringify(input);if(request.current.signature!==signature)request.current={signature,key:crypto.randomUUID()};setBusy(true);try{const goal=await api<GoalRecord>('/goals',{...input,requestKey:request.current.key});if(mounted.current)await onStart(goal);}catch(e){if(mounted.current)onError(e);}finally{if(mounted.current)setBusy(false);}}
+ return <><div className="home-intro"><Cat className="home-cat"/><h1>¿Qué vamos a construir?</h1><p>Cuéntale a Salem el objetivo. Él investiga por dónde empezar.</p></div>
+  <section className="goal-entry" aria-label="Nuevo objetivo"><form onSubmit={e=>{e.preventDefault();void start();}}><label className="sr-only" htmlFor="home-objective">Qué quieres lograr</label><textarea id="home-objective" placeholder="Corrige un error, desarrolla una idea o mejora tu proyecto…" value={objective} onChange={e=>setObjective(e.target.value)} required disabled={busy}/><div className="composer-controls"><label className="composer-project"><FolderKanban size={16}/><span className="sr-only">Proyecto del objetivo</span><select aria-label="Proyecto del objetivo" value={project?.id||''} onChange={e=>setProjectId(e.target.value)} disabled={!projects.length||busy}>{!projects.length&&<option value="">Elige un proyecto</option>}{projects.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select></label><button className="primary send-objective" type="submit" disabled={!project||!agentId||!objective.trim()||busy} aria-label="Investigar objetivo"><span>{busy?'Iniciando…':'Investigar'}</span><ArrowUp size={17}/></button></div></form>
+   <div className="composer-footnote">{agent?<span>{agent.provider==='claude'?'Claude':'Codex'} investiga con el perfil del proyecto.</span>:<span>Primero incorpora un repositorio o prueba la demo local.</span>}<span>Los cambios comienzan al ejecutar una tarea.</span></div>
+  </section>
+  <div className="home-shortcuts"><button onClick={onAddProject}><Plus size={15}/>Incorporar proyecto</button><button onClick={onTask}><ListTodo size={15}/>Agregar tarea</button><button onClick={onDemo}><Play size={14}/>Crear demo local</button></div>
+  {!projects.length&&<section className="home-onboarding"><h2>Tu espacio de trabajo local</h2><p>Usa tu repositorio o empieza con una demo aislada. Claude y Codex utilizan tus sesiones de esta computadora.</p><button className="quiet small" onClick={onManualProject}>Agregar proyecto</button></section>}
+  {project&&<details className="home-team"><summary>Cómo trabajará el equipo en {project.name}</summary><div className="team-stages">{(['define','build','review'] as const).map(stage=>{const id=project.config.supervisor?.roles[stage]||Object.keys(project.config.agents)[0]||'';const a=project.config.agents[id];return <div key={stage}><span>{({define:'Define el plan',build:'Implementa',review:'Revisa'})[stage]}</span><strong>{a?.provider==='claude'?'Claude':a?.provider==='codex'?'Codex':'Sin asignar'}</strong><small>{a?.model||'Predeterminado del CLI'}{a?.effort?` · ${a.effort}`:''}</small></div>;})}</div></details>}
+  <section className="home-recents"><div className="section-heading"><h2>Retoma tu trabajo</h2><span>{executions.length?'Ejecuciones recientes':'Sin actividad todavía'}</span></div>{executions.length?<div className="home-recent-list">{executions.map(e=><button className="recent-work" key={e.id} onClick={()=>onExecution(e.id)}><span className={`state-dot ${e.status}`}/><span className="recent-work-copy"><strong>{e.task.objective||e.task.id}</strong><small>{e.project.name} · {date(e.createdAt)}</small></span><span className={`status ${e.status}`}>{names[e.status]}</span><ChevronRight size={16}/></button>)}</div>:<p className="muted">Aún no hay ejecuciones. Cuando inicies una tarea, verás aquí su avance y sus resultados.</p>}</section>
+  <div className="home-account-status">{(['claude','codex'] as const).map(provider=>{const a=accounts.find(a=>a.provider===provider);return <span key={provider}>{a?.authenticated?<Check size={13}/>:<span className="state-dot"/>}{provider==='claude'?'Claude':'Codex'} <span>{a?.authenticated?'conectado':'sin comprobar'}</span></span>;})}</div>
+ </>;
+}

@@ -25,6 +25,29 @@ const fixture = async version => {
 test('package management is available without npm or application dependencies', () => {
   assert.equal(typeof packaging.installPackage, 'function', 'Windows installation behavior is missing');
 });
+
+test('Salem branding supplies a scalable favicon and real Windows icon sizes',async()=>{
+ const svg=await readFile(new URL('../ui/public/salem.svg',import.meta.url),'utf8');
+ assert.match(svg,/viewBox="0 0 64 64"/);
+ const icon=await readFile(new URL('../ui/public/salem.ico',import.meta.url));
+ assert.equal(icon.readUInt16LE(0),0);assert.equal(icon.readUInt16LE(2),1);
+ const count=icon.readUInt16LE(4);assert.equal(count,9);
+ const sizes=[];for(let i=0;i<count;i++){const at=6+i*16,size=icon[at]||256;sizes.push(size);assert.equal(icon[at+1]||256,size);assert.equal(icon.readUInt16LE(at+6),32);const bytes=icon.readUInt32LE(at+8),offset=icon.readUInt32LE(at+12);assert.ok(offset>=6+count*16&&offset+bytes<=icon.length);assert.equal(icon.subarray(offset,offset+8).toString('hex'),'89504e470d0a1a0a');}
+ assert.deepEqual(sizes,[16,20,24,32,40,48,64,128,256]);
+ const html=await readFile(new URL('../ui/index.html',import.meta.url),'utf8');assert.match(html,/rel="icon"[^>]+salem\.svg/);
+});
+
+test('Windows shortcuts use the cat icon from the verified immutable version',{skip:process.platform!=='win32'},async()=>{
+ const f=await fixture('0.4.0');await mkdir(join(f.payload,'app','web-dist'),{recursive:true});
+ await cp(new URL('../ui/public/salem.ico',import.meta.url),join(f.payload,'app','web-dist','salem.ico'));
+ const manifest=await packaging.createManifest(f.payload,{version:'0.4.0',sourceRevision:'a'.repeat(40),nodeVersion:'22.23.0'});
+ await writeFile(join(f.payload,'manifest.json'),JSON.stringify(manifest));await packaging.installPackage(f.payload,f);
+ const quote=v=>`'${v.replaceAll("'","''")}'`;
+ const script=`$w=New-Object -ComObject WScript.Shell; @('Salem','Salir de Salem','Desinstalar Salem') | ForEach-Object { $w.CreateShortcut((Join-Path ${quote(f.shortcutDir)} ($_+'.lnk'))).IconLocation }`;
+ const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true});
+ assert.equal(result.status,0,result.stderr);const locations=result.stdout.trim().split(/\r?\n/);assert.equal(locations.length,3);
+ const expected=join(f.installDir,'versions',manifest.buildId,'app','web-dist','salem.ico')+',0';for(const location of locations)assert.equal(location.toLowerCase(),expected.toLowerCase());
+});
 test('final packaging refuses source newer than compiled output', async () => {
   assert.equal(typeof buildInputs.assertBuildFresh,'function','Build freshness verification is missing');
   const root=await mkdtemp(join(testRoot,'build-inputs-'));

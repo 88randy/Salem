@@ -84,10 +84,12 @@ function ps(script){const result=spawnSync('powershell.exe',['-NoProfile','-NonI
 async function shortcuts(info,remove=false){
  if(process.platform!=='win32'||!info.shortcutDir)return;
  await safePath(info.shortcutDir);await mkdir(info.shortcutDir,{recursive:true});
+ const icon=join(info.installDir,'versions',info.current,'app','web-dist','salem.ico');
+ const iconSetting=await exists(icon)?` $l.IconLocation=${quote(icon+',0')};`:'';
  for(const [name,file] of [['Salem','Launch.vbs'],['Salir de Salem','Stop.vbs'],['Desinstalar Salem','Uninstall.vbs']]){
   const target=join(info.installDir,file),link=join(info.shortcutDir,`${name}.lnk`);
   if(remove){ps(`$w=New-Object -ComObject WScript.Shell; $p=${quote(link)}; if(Test-Path -LiteralPath $p){$l=$w.CreateShortcut($p); if($l.Arguments -eq ${quote('"'+target+'"')}){Remove-Item -LiteralPath $p -Force}}`);}
-  else ps(`$w=New-Object -ComObject WScript.Shell; $l=$w.CreateShortcut(${quote(link)}); $l.TargetPath="$env:WINDIR\\System32\\wscript.exe"; $l.Arguments=${quote('"'+target+'"')}; $l.WorkingDirectory=${quote(info.installDir)}; $l.Description=${quote(name)}; $l.Save()`);
+  else ps(`$w=New-Object -ComObject WScript.Shell; $l=$w.CreateShortcut(${quote(link)}); $l.TargetPath="$env:WINDIR\\System32\\wscript.exe"; $l.Arguments=${quote('"'+target+'"')}; $l.WorkingDirectory=${quote(info.installDir)}; $l.Description=${quote(name)};${iconSetting} $l.Save()`);
  }
 }
 export async function installPackage(payload,options={}){

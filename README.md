@@ -6,9 +6,9 @@ Un espacio local para trabajar con Claude y Codex sobre tus proyectos de softwar
 
 Describe un objetivo, deja que Salem investigue el repositorio y revisa el plan. Después, el supervisor coordina implementación, pruebas y revisión con las cuentas que ya utilizas. Tú eliges los modelos, los límites y las acciones que puede realizar.
 
-**Versión inicial para Windows.** Consulta las [notas de la versión](docs/RELEASE-0.3.0.md) para conocer la validación y las limitaciones comprobadas. Código abierto bajo [MIT](LICENSE).
+**Beta local para Windows.** Consulta las [notas de la interfaz 0.4.0](docs/RELEASE-0.4.0.md) y los resultados de Actions para conocer la validación y sus límites. Código abierto bajo [MIT](LICENSE).
 
-![Inicio de Salem en una instalación nueva](.github/assets/salem.jpg)
+![Inicio de Salem](.github/assets/salem.jpg)
 
 ## Empezar
 
@@ -43,6 +43,10 @@ Abre la dirección que imprime la terminal, normalmente `http://127.0.0.1:3210`.
 - **Medir:** muestra tiempos, iteraciones y uso reportado por los proveedores. Los datos desconocidos permanecen desconocidos; no se presentan como ahorro demostrado.
 
 ## Cómo colaboran las IA
+
+La interfaz reúne tu trabajo en una navegación lateral con proyectos y recientes. Desde **Inicio** puedes investigar un objetivo sin preparar manualmente una tarea. **Buscar** (Ctrl+K) encuentra proyectos, tareas, objetivos, ejecuciones y mejoras. **Actividad** reúne los procesos en curso y su historial; cada resultado abre su detalle. Las ejecuciones muestran el contexto y los agentes a un lado, con checks, cambios, logs, métricas y entrega en sus pestañas.
+
+En **Ajustes** puedes elegir tema claro, oscuro o del sistema. Esta preferencia se guarda en el navegador, separada de los ajustes del servidor y de los perfiles de proyecto.
 
 Salem es el controlador del flujo. Las IA investigan, proponen, implementan y revisan; el controlador conserva el estado y comprueba las reglas. Puedes usar ambos proveedores o configurar uno solo. No hace falta que compartan credenciales ni que editen simultáneamente los mismos archivos.
 

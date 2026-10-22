@@ -13,8 +13,8 @@ const promotionNames={queued:'En cola',preparing:'Preparando respaldo',applying:
 const date=(n:number)=>new Date(n).toLocaleString('es-MX');
 function inputTotal(usage:Usage|null|undefined){if(!usage)return 'No reportada';const values=usage.accounting?.inputIncludesCache===false?[usage.inputTokens,usage.cachedInputTokens,usage.accounting.cacheCreationInputTokens]:[usage.inputTokens];return values.every(v=>v!=null)?values.reduce<number>((total,v)=>total+v!,0).toLocaleString('es-MX'):'No reportada';}
 function cost(usage:Usage|null|undefined){if(usage?.costUsd==null||usage.costKind==='unavailable')return 'No reportado';return `${usage.costUsd>0&&usage.costUsd<0.000001?'<0.000001':usage.costUsd.toLocaleString('es-MX',{maximumFractionDigits:6})} (${usage.costKind==='estimated'?'estimado':'reportado'})`;}
-export function EvolutionPage({state,onChanged,onError}:{state:LocalState;onChanged:()=>Promise<void>;onError:(e:unknown)=>void}){
- const [taskId,setTask]=useState(''),[agentId,setAgent]=useState(''),[busy,setBusy]=useState(false),[selected,setSelected]=useState<string|null>(null),[incidents,setIncidents]=useState<EvolutionIncident[]>([]),[log,setLog]=useState<string|null>(null);
+export function EvolutionPage({initialId,state,onChanged,onError}:{initialId?:string|null;state:LocalState;onChanged:()=>Promise<void>;onError:(e:unknown)=>void}){
+ const [taskId,setTask]=useState(''),[agentId,setAgent]=useState(''),[busy,setBusy]=useState(false),[selected,setSelected]=useState<string|null>(initialId||null),[incidents,setIncidents]=useState<EvolutionIncident[]>([]),[log,setLog]=useState<string|null>(null);
  const [applyOnSuccess,setApplyOnSuccess]=useState(true);
  const pendingStart=useRef<{taskId:string;agentId:string;applyOnSuccess:boolean;key:string}|null>(null),logSequence=useRef(0);
  function choose(id:string|null){logSequence.current++;setSelected(id);setLog(null);}

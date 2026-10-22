@@ -62,6 +62,7 @@ class SalemSetup {
       if(silent) {Install(install,data,shortcuts);return 0;}
       Application.EnableVisualStyles();
       Form form=new Form();form.Text="Instalar Salem";form.Width=610;form.Height=315;form.StartPosition=FormStartPosition.CenterScreen;form.FormBorderStyle=FormBorderStyle.FixedDialog;form.MaximizeBox=false;
+      form.Icon=System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
       Label title=new Label();title.Text="Salem · interfaz local para tus agentes";title.SetBounds(22,18,560,24);form.Controls.Add(title);
       Label note=new Label();note.Text="Instalación por usuario. Incluye Node.js. Tus datos se guardan fuera de la aplicación.\nCierra Salem antes de actualizar; las versiones anteriores se conservan.";note.SetBounds(22,48,560,45);form.Controls.Add(note);
       Label il=new Label();il.Text="Carpeta de instalación";il.SetBounds(22,100,540,18);form.Controls.Add(il);
