@@ -1,9 +1,11 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile} from 'node:fs/promises';import {join} from 'node:path';import {tmpdir} from 'node:os';
+import {mkdtemp,mkdir,writeFile} from 'node:fs/promises';import {join,resolve} from 'node:path';import {tmpdir} from 'node:os';
 import {LocalStore} from '../src/local/store.js';import {startLocalServer} from '../src/local/server.js';import {createLocalDemo} from '../src/local/demo.js';
 test('evolution HTTP protects mutations and preserves idempotent queued experiments and old catalogs',async()=>{
  const root=await mkdtemp(join(tmpdir(),'salem evolution http ')),store=new LocalStore(join(root,'data')),{project,task}=await createLocalDemo(store),web=join(root,'web');await mkdir(web);await writeFile(join(web,'index.html'),'Salem');
- const config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await store.saveProject({...project,config});
+ const config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};
+ config.agents={worker:{provider:'codex',command:[process.execPath,resolve('tests/fixtures/evolution-agent.mjs'),'codex','repair']}};config.supervisor!.roles={define:'worker',build:'worker',review:'worker'};
+ await store.saveProject({...project,config});
  const manager={initialize:async()=>{},start:async()=>{},cancel:async()=>{},resume:async()=>{},detail:async()=>{},artifact:async()=>{},isBusy:()=>false,activeCount:()=>4,shutdown:async()=>{}};
  const server=await startLocalServer({dataDir:store.root,staticDir:web,port:0,store,manager});try{const b=await fetch(server.url+'/api/bootstrap'),bootstrap=await b.json() as {csrfToken:string},cookie=b.headers.get('set-cookie')!.split(';')[0]!,headers={Cookie:cookie,Origin:server.url,'Content-Type':'application/json','X-Salem-CSRF':bootstrap.csrfToken};
  const post=(path:string,body:unknown,h=headers)=>fetch(server.url+'/api/'+path,{method:'POST',headers:h,body:JSON.stringify(body)});

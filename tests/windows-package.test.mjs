@@ -219,7 +219,7 @@ test('Setup.exe installs and upgrades silently with bundled runtime and preserve
   if(process.env.SALEM_WINDOWS_UPGRADE_SETUP){assert.notEqual(updated.current,initial.current);assert.equal(updated.previous,initial.current);await access(versionDir);}
   assert.equal(await readFile(join(dataDir,'retain.txt'),'utf8'),'personal-data');
   result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',join(installDir,'Uninstall.ps1'),'-Quiet'],{encoding:'utf8',windowsHide:true,timeout:60000});
-  assert.equal(result.status,0,result.stderr);await assert.rejects(access(installDir));
+  assert.equal(result.status,0,result.stderr||result.error?.message||`signal=${result.signal}`);await assert.rejects(access(installDir));
   assert.equal(await readFile(join(dataDir,'retain.txt'),'utf8'),'personal-data');
   assert.deepEqual((await readdir(shortcutDir)).filter(f=>f.endsWith('.lnk')),[]);
   const evidence={setup,upgradeSetup:process.env.SALEM_WINDOWS_UPGRADE_SETUP??setup,initialVersion:initial.current,updatedVersion:updated.current,dataPreserved:true,uninstalled:true,port,root};
