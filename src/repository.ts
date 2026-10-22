@@ -50,10 +50,11 @@ export async function repositorySnapshot(root: string): Promise<RepositorySnapsh
   return { root, gitDir, head, treeHash: hash.digest("hex"), dirty: status.length > 0 };
 }
 export async function instructionsHash(config: ProjectConfig): Promise<string> {
+  const root = await realpath(config.repoRoot);
   const entries = [];
   for (const path of config.contextFiles) {
-    const file = await realpath(resolve(config.repoRoot, path));
-    if (!isInside(config.repoRoot, file)) throw new Error("Context escapes worktree");
+    const file = await realpath(resolve(root, path));
+    if (!isInside(root, file)) throw new Error("Context escapes worktree");
     entries.push([path, await readFile(file, "utf8")]);
   }
   if (config.instructions !== undefined) entries.push(["<salem-inline>", config.instructions]);

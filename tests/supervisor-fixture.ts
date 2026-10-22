@@ -1,13 +1,15 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { runProcess } from "../src/process.js";
+import { redact, runProcess } from "../src/process.js";
 import type { ProjectConfig, TaskSpec, RunState } from "../src/contracts.js";
 import { runFingerprint } from "../src/runner.js";
 
 export async function git(root: string, ...args: string[]): Promise<string> {
+  const started = Date.now();
   const result = await runProcess({ command: ["git", ...args], cwd: root, timeoutMs: 5000, maxOutputBytes: 200000 });
-  if (result.exitCode !== 0) throw new Error(result.stderr); return result.stdout.trim();
+  if (result.status !== "exited" || result.exitCode !== 0) throw new Error(redact(`Fixture git ${args[0] ?? "unknown"}: status=${result.status}, exitCode=${result.exitCode}, elapsedMs=${Date.now() - started}, cwd=${root}; ${result.error ?? ""}; ${result.stderr}`).slice(0, 4000));
+  return result.stdout.trim();
 }
 export async function supervisorFixture(mode = "ok") {
   const dir = await mkdtemp(join(tmpdir(), "supervisor demo "));
