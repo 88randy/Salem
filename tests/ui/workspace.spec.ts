@@ -4,7 +4,7 @@ const settings={revision:1,commands:{claude:['claude'],codex:['codex']},maxConcu
 const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'demo',repoRoot:'C:/demo',contextFiles:[],agents:{thinker:{provider:'claude',command:['claude'],model:'claude-opus-5-5',effort:'medium'},builder:{provider:'codex',command:['codex']}},supervisor:{roles:{define:'thinker',build:'builder',review:'thinker'}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
 const execution={id:'e',revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,status:'completed',reason:null,project,task:{id:'BUG-SUM',objective:'Corregir la suma',scope:['sum.mjs'],acceptance:['Suma correcta'],references:[]},workspace:'C:/isolated',sourceSha:'a'.repeat(40),runId:'run',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[]};
 
-async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initialGoals=[] as any[],evolutions=[] as any[]}={}){
+async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initialGoals=[] as any[],evolutions=[] as any[],detailRun=null as any}={}){
  const requests:any[]=[];let goals:any[]=initialGoals;
  const state=()=>({schemaVersion:1,revision:1,settings,projects:[project],tasks:[],executions,goals,evolutions});
  await page.route('**/api/**',async r=>{
@@ -17,7 +17,7 @@ async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initial
    goals=[{...requests.at(-1),id:'goal',revision:1,project,status:'queued',sourceSha:null,createdAt:1,answers:[],attempts:[],plan:null,createdTaskId:null}];
    return r.fulfill({json:goals[0]});
   }
-  if(path==='/api/executions/e')return r.fulfill({json:{execution:executions.find(e=>e.id==='e')||execution,run:null,metrics:null,diff:'',artifacts:[]}});
+  if(path==='/api/executions/e')return r.fulfill({json:{execution:executions.find(e=>e.id==='e')||execution,run:detailRun,metrics:null,diff:'',artifacts:[]}});
   return r.fulfill({status:404,json:{error:path}});
  });return requests;
 }
@@ -111,4 +111,12 @@ test('dark theme keeps form surfaces dark and the data directory readable',async
 test('collapsed navigation keeps the new work action named and keyboard accessible',async({page})=>{
  await fixture(page);await page.goto('/');await page.getByRole('button',{name:'Contraer navegación',exact:true}).click();
  const action=page.getByRole('button',{name:'Nuevo trabajo',exact:true});await expect(action).toBeVisible();await action.focus();await expect(action).toBeFocused();
+});
+
+test('accepted work identifies the stage of earlier diagnostic findings without hiding them',async({page})=>{
+ const payload={summary:'Defecto inicial detectado',verdict:'success',evidenceRefs:[],findings:[{severity:'important',description:'La suma original resta sus argumentos'}]};
+ const run={attempts:[{id:'a',stage:'define',agentId:'thinker',startedAt:1,finishedAt:2,valid:true,result:{status:'succeeded',durationMs:1,payload}}],checks:[],history:[],acceptance:{accepted:true,reasons:[]},validation:null};
+ await fixture(page,{executions:[execution],detailRun:run});await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();await page.getByRole('button',{name:'Ver ejecución',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Hallazgos por etapa',exact:true})).toBeVisible();await expect(page.getByText('Definición · thinker',{exact:true})).toBeVisible();
+ await expect(page.locator('.finding')).toContainText('La suma original resta sus argumentos');await expect(page.getByRole('complementary',{name:'Contexto de la ejecución'})).toContainText('Criterios aceptados');
 });
