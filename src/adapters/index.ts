@@ -3,8 +3,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StageInput, StageResult } from "../contracts.js";
 import { runProcess, redact } from "../process.js";
-import { codexCommand, codexMetadata } from "./codex.js";
-import { claudeCommand, claudeResponse } from "./claude.js";
+import { codexCommand, codexMetadata, codexFailureMessage } from "./codex.js";
+import { claudeCommand, claudeResponse, claudeFailureMessage } from "./claude.js";
 import { parsePayload, stageSchema } from "./schema.js";
 import { inspectAgent } from "../doctor.js";
 import { readFinalMessage } from "./final-message.js";
@@ -58,7 +58,7 @@ export async function runStage(input: StageInput, signal?: AbortSignal): Promise
       catch (e) { codexFinalError = e; }
     }
     if (proc.status !== "exited") { result.status = proc.status; result.error = proc.error; }
-    else if (proc.exitCode !== 0) result.error = `Agent exited with code ${proc.exitCode}; inspect stderr/stdout artifacts`;
+    else if (proc.exitCode !== 0) result.error = (agent.provider === "claude" ? claudeFailureMessage(proc.stdout) : codexFailureMessage(proc.stdout)) ?? `Agent exited with code ${proc.exitCode}; inspect stderr/stdout artifacts`;
     else {
       result.failureKind = "protocol";
       let raw: unknown;

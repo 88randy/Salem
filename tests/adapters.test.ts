@@ -84,3 +84,29 @@ test("Codex final-message is also redacted when the process fails", async () => 
     assert.equal((await readFile(join(i.artifactDir, "last-message.json"), "utf8")).includes(secret), false);
   } finally { delete process.env.AGENT_WORKFLOW_TEST_TOKEN; }
 });
+
+for (const provider of ["claude", "codex"] as const) {
+  test(`${provider}: provider refusal is readable and redacted while the stage remains failed`, async () => {
+    const previous = process.env.AGENT_WORKFLOW_TEST_TOKEN;
+    const secret = "private-provider-token-" + Date.now(); process.env.AGENT_WORKFLOW_TEST_TOKEN = secret;
+    try {
+      const i = await input(provider, "service-error"), r = await runStage(i);
+      assert.equal(r.status, "failed"); assert.equal(r.payload, null); assert.equal(r.failureKind, "unknown");
+      assert.match(r.error ?? "", provider === "claude" ? /session limit.*resets 6:10pm/ : /model is not supported/);
+      assert.ok((r.error?.length ?? 0) <= 800); assert.equal(JSON.stringify(r).includes(secret), false);
+      assert.equal((await readFile(join(i.artifactDir, "result.json"), "utf8")).includes(secret), false);
+    } finally { if (previous === undefined) delete process.env.AGENT_WORKFLOW_TEST_TOKEN; else process.env.AGENT_WORKFLOW_TEST_TOKEN = previous; }
+  });
+}
+
+test("Claude error payload with exit zero stays rejected and exposes its usage limit", async () => {
+  const r = await runStage(await input("claude", "service-error-zero"));
+  assert.equal(r.status, "failed"); assert.equal(r.payload, null); assert.equal(r.failureKind, "protocol");
+  assert.match(r.error ?? "", /session limit.*resets 6:10pm/);
+});
+
+test("Codex failed turn with exit zero stays rejected and exposes the provider refusal", async () => {
+  const r = await runStage(await input("codex", "service-error-zero"));
+  assert.equal(r.status, "failed"); assert.equal(r.payload, null); assert.equal(r.failureKind, "protocol");
+  assert.match(r.error ?? "", /model is not supported/);
+});

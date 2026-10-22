@@ -27,6 +27,11 @@ else {
   if (mode === 'large-file') payload.summary = 'x'.repeat(100000);
   if (mode === 'malformed') { console.log('not json'); process.exit(0); }
   if (mode === 'auth') { console.log(JSON.stringify({ type: 'result', is_error: true, result: 'Not logged in' })); process.exit(1); }
+  if (mode === 'service-error' || mode === 'service-error-zero') {
+    const message=(provider==='claude'?"You've hit your session limit; resets 6:10pm.":'The selected model is not supported for this account.')+' '+(process.env.AGENT_WORKFLOW_TEST_TOKEN??'')+' '+ 'x'.repeat(900);
+    console.log(JSON.stringify(provider==='claude'?{type:'result',subtype:'success',is_error:true,api_error_status:429,api_error:'usage_limit_reached',result:message}:{type:'turn.failed',error:{message}}));
+    process.exit(mode==='service-error-zero'?0:1);
+  }
   if (mode === 'usage-failed') {
     console.log(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, session_id: 'failed-session',
       usage: { input_tokens: 11, output_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, total_cost_usd: 0.03 })); process.exit(1);

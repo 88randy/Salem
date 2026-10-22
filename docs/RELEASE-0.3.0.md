@@ -28,6 +28,8 @@ Los recibos privados, rutas personales y credenciales quedan fuera del repositor
 
 Una sesión autenticada no acredita acceso a todos los modelos. En la prueba local, el servicio rechazó el preset Sol para la sesión de Codex con ChatGPT. La elección explícita **Predeterminado del CLI** funcionó; Salem conserva el rechazo y no cambia modelos silenciosamente. El CLI no informó el nombre del modelo efectivo de Codex. Consulta [Modelos](MODELS.md) antes de elegir un preset para tu cuenta.
 
+Los rechazos estructurados por cuota o modelo muestran el mensaje del proveedor, acotado y redactado, conservando el fallo y la evidencia. No cambian el modelo ni amplían permisos para continuar.
+
 ## Uso y límites
 
 Instala Git y los CLIs oficiales de los proveedores que utilizarás. Abre Salem y comprueba o conecta tus cuentas en **Cuentas**. No hace falta una API key si el CLI usa tu sesión existente; se consume la cuota o los créditos de esa cuenta.
