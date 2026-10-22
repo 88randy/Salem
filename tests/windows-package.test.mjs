@@ -226,3 +226,24 @@ test('Setup.exe installs and upgrades silently with bundled runtime and preserve
   await writeFile(join(root,'evidence.json'),JSON.stringify(evidence,null,2));
   console.log(`Windows Setup evidence: ${join(root,'evidence.json')}`);
 });
+
+test('Setup.exe accepts a real short TEMP alias and preserves data on uninstall', {skip:!process.env.SALEM_WINDOWS_SETUP}, async t => {
+  const root=await mkdtemp(join(testRoot,'setup-short-temp-')),temp=join(root,'Temporary Folder');
+  await mkdir(temp,{recursive:true});
+  const script=`Add-Type @'
+using System; using System.Text; using System.Runtime.InteropServices;
+public static class SalemShortTemp { [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern uint GetShortPathName(string name,StringBuilder output,uint size); }
+'@
+$buffer=New-Object Text.StringBuilder 32768; $length=[SalemShortTemp]::GetShortPathName('${temp.replaceAll("'","''")}',$buffer,32768); if($length -eq 0){throw 'Cannot obtain short TEMP path'}; $buffer.ToString()`;
+  const short=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true});
+  assert.equal(short.status,0,short.stderr);const shortTemp=short.stdout.trim();
+  if(shortTemp.toLowerCase()===resolve(temp).toLowerCase()){t.skip('The test volume does not provide 8.3 aliases');return;}
+  const setup=resolve(process.env.SALEM_WINDOWS_UPGRADE_SETUP??process.env.SALEM_WINDOWS_SETUP),installDir=join(root,'Programs','Salem'),dataDir=join(root,'Data'),shortcuts=join(root,'Shortcuts');
+  const run=(where,target)=>spawnSync(setup,['--silent','--install-dir',target,'--data-dir',dataDir,'--shortcut-dir',shortcuts],{encoding:'utf8',windowsHide:true,timeout:120000,env:{...process.env,TEMP:where,TMP:where}});
+  let result=run(shortTemp,installDir);
+  assert.equal(result.status,0,result.stderr||result.error?.message||'Setup rejected a real short TEMP alias');
+  await access(join(installDir,'install.json'));await mkdir(dataDir,{recursive:true});await writeFile(join(dataDir,'retain.txt'),'keep');
+  result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',join(installDir,'Uninstall.ps1'),'-Quiet'],{encoding:'utf8',windowsHide:true,timeout:60000});
+  assert.equal(result.status,0,result.stderr||result.error?.message);await assert.rejects(access(installDir));assert.equal(await readFile(join(dataDir,'retain.txt'),'utf8'),'keep');
+  console.log('Windows Setup short TEMP alias and data preservation checks passed');
+});

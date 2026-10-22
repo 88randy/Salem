@@ -15,7 +15,7 @@ async function setup(data: Record<string, unknown> = {}, options: { timeoutMs?: 
   const state: LocalState = { schemaVersion: 1, revision: 1, settings: defaultSettings(), projects: [], tasks: [], executions: [] };
   for (const provider of ["claude", "codex"] as const) state.settings.commands[provider] = [process.execPath, fixturePath, "--state", stateFile, "--provider", provider];
   const manager = new AccountManager({ readState: async () => state }, { cwd: dir, timeoutMs: 4000, ...options });
-  return { manager, dir, state, stateFile, async events() { try { return (await readFile(`${stateFile}.events`, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as string[]); } catch { return []; } }, async close() { await manager.close(); await rm(dir, { recursive: true, force: true }); } };
+  return { manager, dir, state, stateFile, async events() { try { return (await readFile(`${stateFile}.events`, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as string[]); } catch { return []; } }, async close() { await manager.close(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } };
 }
 async function until(manager: AccountManager, predicate: (view: AccountView) => boolean, provider: Provider = "codex", timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
@@ -243,6 +243,7 @@ test("guardian stops its own login process when the Salem parent dies", async ()
     await startAuthProcess({ command: ${JSON.stringify([...s.state.settings.commands.codex, "login"])}, cwd: ${JSON.stringify(s.dir)}, timeoutMs: 15000, signal: new AbortController().signal, onOutput() {} });
     setInterval(() => {}, 1000);`;
   const parent = spawn(process.execPath, [...process.execArgv, "--input-type=module", "-e", code], { shell: false, windowsHide: true, stdio: "ignore" });
+  const parentClosed = new Promise<void>(resolve => parent.once("close", () => resolve()));
   let loginPid: number | undefined;
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   try {
@@ -259,6 +260,7 @@ test("guardian stops its own login process when the Salem parent dies", async ()
   } finally {
     parent.kill();
     if (loginPid && alive(loginPid)) process.kill(loginPid);
+    await parentClosed;
     await s.close();
   }
 });

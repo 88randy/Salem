@@ -1,10 +1,14 @@
 # Salem
 
+[![CI Windows](https://github.com/88randy/Salem/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/88randy/Salem/actions/workflows/ci.yml)
+
 Un espacio local para trabajar con Claude y Codex sobre tus proyectos de software.
 
 Describe un objetivo, deja que Salem investigue el repositorio y revisa el plan. Después, el supervisor coordina implementación, pruebas y revisión con las cuentas que ya utilizas. Tú eliges los modelos, los límites y las acciones que puede realizar.
 
 **Versión inicial para Windows.** Consulta las [notas de la versión](docs/RELEASE-0.3.0.md) para conocer la validación y las limitaciones comprobadas. Código abierto bajo [MIT](LICENSE).
+
+![Inicio de Salem en una instalación nueva](.github/assets/salem.jpg)
 
 ## Empezar
 
