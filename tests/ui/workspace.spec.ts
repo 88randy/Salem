@@ -17,7 +17,7 @@ async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initial
    goals=[{...requests.at(-1),id:'goal',revision:1,project,status:'queued',sourceSha:null,createdAt:1,answers:[],attempts:[],plan:null,createdTaskId:null}];
    return r.fulfill({json:goals[0]});
   }
-  if(path==='/api/executions/e')return r.fulfill({json:{execution,run:null,metrics:null,diff:'',artifacts:[]}});
+  if(path==='/api/executions/e')return r.fulfill({json:{execution:executions.find(e=>e.id==='e')||execution,run:null,metrics:null,diff:'',artifacts:[]}});
   return r.fulfill({status:404,json:{error:path}});
  });return requests;
 }
@@ -47,6 +47,21 @@ test('leaving home during research startup does not pull the user back when its 
  page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Proyectos',exact:true}).click();await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
  const response=page.waitForResponse(r=>r.url().endsWith('/api/goals'));release();await (await response).finished();await page.waitForTimeout(500);
  await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
+});
+
+test('a delayed state refresh after starting research does not override later navigation',async({page})=>{
+ const requests=await fixture(page);let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(r=>release=r),received=new Promise<void>(r=>entered=r);
+ await page.route('**/api/state',async r=>{if(requests.length){entered();await gate;}return r.fallback();});
+ await page.goto('/');await page.getByLabel('Qué quieres lograr',{exact:true}).fill('Revisar cálculo');await page.getByRole('button',{name:'Investigar objetivo',exact:true}).click();await received;
+ page.on('dialog',d=>d.accept());await page.getByRole('button',{name:'Proyectos',exact:true}).click();await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
+ const response=page.waitForResponse(r=>r.url().endsWith('/api/state'));release();await (await response).finished();await page.waitForTimeout(500);await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
+});
+
+test('long generated objectives show a readable preview while keeping their complete text available',async({page})=>{
+ const text='Corregir suma. '+('Plan de investigación y evidencia del repositorio. '.repeat(40));await fixture(page,{executions:[{...execution,task:{...execution.task,objective:text}}]});await page.goto('/');
+ await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();await page.getByRole('button',{name:'Ver ejecución',exact:true}).click();
+ const objective=page.locator('.execution-feed .objective-text');await expect(objective.getByText('Ver objetivo completo',{exact:true})).toBeVisible();await expect(objective.locator('.objective-full')).not.toBeVisible();
+ await objective.getByText('Ver objetivo completo',{exact:true}).click();await expect(objective.locator('.objective-full')).toBeVisible();await expect(objective.locator('.objective-full')).toHaveText(text);
 });
 
 test('search opens real history and execution context does not turn completed into accepted',async({page})=>{
@@ -83,4 +98,17 @@ test('appearance persists independently of the server configuration and mobile h
   await page.setViewportSize({width:width!,height:height!});await page.getByRole('button',{name:'Inicio',exact:true}).click();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width!);
  }
+});
+
+test('dark theme keeps form surfaces dark and the data directory readable',async({page})=>{
+ await fixture(page);await page.goto('/');await page.getByRole('button',{name:'Ajustes',exact:true}).click();await page.getByLabel('Tema de la interfaz',{exact:true}).selectOption('dark');
+ const colors=await page.locator('.data-location code').evaluate(e=>({text:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor}));
+ const luminance=(color:string)=>{const c=(color.match(/\d+/g)||[]).slice(0,3).map(Number).map(v=>{const n=v/255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4;});return .2126*c[0]!+.7152*c[1]!+.0722*c[2]!;};
+ const values=[luminance(colors.text),luminance(colors.background)].sort((a,b)=>b-a);expect((values[0]!+.05)/(values[1]!+.05)).toBeGreaterThanOrEqual(4.5);
+ const background=await page.getByLabel('Puerto preferido al reiniciar').evaluate(e=>getComputedStyle(e).backgroundColor);expect(luminance(background)).toBeLessThan(.2);
+});
+
+test('collapsed navigation keeps the new work action named and keyboard accessible',async({page})=>{
+ await fixture(page);await page.goto('/');await page.getByRole('button',{name:'Contraer navegación',exact:true}).click();
+ const action=page.getByRole('button',{name:'Nuevo trabajo',exact:true});await expect(action).toBeVisible();await action.focus();await expect(action).toBeFocused();
 });
