@@ -4,7 +4,7 @@ import type { StageInput } from "../contracts.js";
 import { inspectAgent } from "../doctor.js";
 import { runProcess, redact } from "../process.js";
 import { atomicJson, digest } from "../state-store.js";
-import { codexCommand, codexMetadata } from "../adapters/codex.js";
+import { codexCommand, codexMetadata, codexFailureMessage } from "../adapters/codex.js";
 import { claudeCommand, claudeResponse } from "../adapters/claude.js";
 import { readFinalMessage } from "../adapters/final-message.js";
 import { observeUsage } from "../adapters/usage.js";
@@ -77,7 +77,7 @@ export async function runPlanning(input:PlanningInput,signal:AbortSignal):Promis
   await save("stdout.log",proc.stdout);await save("stderr.log",proc.stderr);
   try{const observed=observeUsage(agent.provider,proc.stdout);result.usage=observed.usage;result.sessionId=observed.sessionId;}catch{/* retain raw incomplete evidence */}
   if(proc.status!=="exited"){result.status=proc.status;throw localError(proc.error??`Investigación ${proc.status}`);}
-  if(proc.exitCode!==0)throw localError(`El agente terminó con código ${proc.exitCode}; consulta los logs.`);
+  if(proc.exitCode!==0)throw localError((agent.provider==='codex'?codexFailureMessage(proc.stdout):null)??`El agente terminó con código ${proc.exitCode}; consulta los logs.`);
   let raw:unknown;
   if(agent.provider==="codex"){const metadata=codexMetadata(proc.stdout);result.usage=metadata.usage;result.sessionId=metadata.sessionId;raw=await readFinalMessage(join(input.artifactDir,"last-message.json"),input.project.config.budgets.maxOutputBytes);}
   else{const response=claudeResponse(proc.stdout);result.usage=response.usage;result.sessionId=response.sessionId;raw=response.payload;}

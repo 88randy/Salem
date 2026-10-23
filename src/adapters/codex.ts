@@ -11,7 +11,18 @@ export function codexFailureMessage(stdout: string): string | null {
       if (typeof value === "string" && value.trim()) message = value;
     } catch { /* unrelated or incomplete events retain their raw evidence */ }
   }
-  return message === null ? null : redact("Codex: " + message).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 800);
+  if(message===null)return null;
+  // Some CLI versions wrap the provider response as JSON inside a message.
+  for(let depth=0;depth<3;depth++){
+    try{
+      const nested=JSON.parse(message) as {error?:{message?:unknown}} | null;
+      if(typeof nested?.error?.message!=='string')break;
+      message=nested.error.message;
+    }catch{break;}
+  }
+  const advice=/model is not supported|model[^\n]{0,120}(?:not available|not supported)/i.test(message)
+    ? ' En Proyectos, edita los agentes y selecciona Predeterminado del CLI o un modelo disponible para tu cuenta. Si cambiaste el perfil, inicia una conversación nueva; el historial anterior se conserva.' : '';
+  return (redact('Codex: '+message).replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,800-advice.length)+advice).slice(0,800);
 }
 export function codexCommand(input: StageInput): string[] {
   const agent = input.config.agents[input.agentId]!;

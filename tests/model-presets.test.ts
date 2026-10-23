@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { defaultAgent, defaultSettings } from '../src/local/contracts.js';
 import * as models from '../src/model-presets.js';
 
-test('new agents propose explicit editable models without changing configured command arguments', () => {
+test('new Codex agents use the clean CLI default without forcing an unavailable account model', () => {
  const settings=defaultSettings();
  const codex=defaultAgent('codex',settings);
- assert.equal(codex.model,'gpt-6.1-sol');
+ assert.equal(codex.model,undefined);
+ assert.equal(codex.ignoreUserConfig,true);
  assert.equal(codex.effort,undefined);
  assert.deepEqual(codex.command,settings.commands.codex);
  assert.notEqual(codex.command,settings.commands.codex);
@@ -23,7 +24,7 @@ test('changing provider clears incompatible model and effort and proposes the ne
  const original={provider:'codex' as const,command:['custom-codex'],model:'imported-codex-model',effort:'xhigh',ignoreUserConfig:true};
  assert.deepEqual(change(original,'claude',['custom-claude']),{provider:'claude',command:['custom-claude'],model:'claude-opus-5-5',effort:'medium'});
  const back=change({provider:'claude',command:['claude'],model:'unknown-import',effort:'max'},'codex',['custom-codex']);
- assert.deepEqual(back,{provider:'codex',command:['custom-codex'],model:'gpt-6.1-sol',ignoreUserConfig:true});
+ assert.deepEqual(back,{provider:'codex',command:['custom-codex'],ignoreUserConfig:true});
  assert.equal(original.model,'imported-codex-model');
  assert.equal(change(original,'codex',['other']),original,'editing existing profiles must not silently rewrite model selections');
 });
