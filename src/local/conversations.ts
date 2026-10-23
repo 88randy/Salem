@@ -22,8 +22,8 @@ export class ConversationManager{
  constructor(readonly store:LocalStore,readonly goals:GoalManager,readonly executions:Pick<ExecutionManager,'isActive'|'acceptedBase'|'startManaged'|'checkpoint'>&{cancel(id:string):Promise<unknown>;resumeManaged(id:string):Promise<unknown>},private options:{autoStart?:boolean;canStart?:()=>boolean}={}){}
  private serial<T>(fn:()=>Promise<T>):Promise<T>{const p=this.tail.then(fn);this.tail=p.catch(()=>{});return p;}
  async initialize(){
-  for(const c of (await this.store.readState()).conversations??[])if(['planning','working'].includes(c.status)){
-   await this.store.updateConversation(c.id,v=>{v.status='paused';v.reason='Salem se reinició. Continúa para reconciliar los resultados guardados; las tareas aceptadas se conservan.';event(v,`restart:${v.revision}`,v.reason);});
+  for(const c of (await this.store.readState()).conversations??[])if(['planning','working'].includes(c.status)||c.resumeAfterCommandKey!==undefined||c.commands.some(cmd=>!c.handledCommands.includes(cmd.key))){
+   await this.store.updateConversation(c.id,v=>{v.status='paused';v.resumeAfterCommandKey=v.commands.at(-1)!.key;v.reason='Salem se reinició. Continúa para reconciliar los resultados guardados; las tareas aceptadas y los mensajes pendientes se conservan.';event(v,`restart:${v.revision}`,v.reason);});
    if(c.goalId)await this.goals.cancel(c.goalId);
    for(const step of c.steps)if(step.executionId)await this.executions.cancel(step.executionId);
   }
@@ -63,7 +63,17 @@ export class ConversationManager{
   await this.store.updateConversation(c.id,v=>{const step=v.steps.find(s=>s.key===key)!;step.status='accepted';v.lastAcceptedExecutionId=id;event(v,`accepted:${id}`,`Completado: ${step.planTask.title}. Los checks y la revisión independiente aceptaron el resultado.`,{kind:'execution',id});});
  }
  private async reconcile(id:string){
-  let c=await this.store.findConversation(id);const command=c.commands.find(cmd=>!c.handledCommands.includes(cmd.key));
+  let c=await this.store.findConversation(id);
+  if(c.resumeAfterCommandKey!==undefined){
+   const boundary=c.commands.findIndex(cmd=>cmd.key===c.resumeAfterCommandKey);
+   if(boundary<0)throw localError('Falta la referencia de recuperación del chat. Conserva el historial para revisarlo.',409);
+   const continuation=c.commands.slice(boundary+1).find(cmd=>!c.handledCommands.includes(cmd.key)&&['continue','retry'].includes(cmd.kind));
+   if(!continuation)return;
+   // Do not consume the pending queue. A fresh operator command releases it;
+   // normal ordered reconciliation still handles each request exactly once.
+   c=await this.store.updateConversation(id,v=>{delete v.resumeAfterCommandKey;v.reason=null;});
+  }
+  const command=c.commands.find(cmd=>!c.handledCommands.includes(cmd.key));
   if(command){
    if(command.kind==='message'||command.kind==='pause'){
     if(!await this.stop(c))return;c=await this.store.findConversation(id);
@@ -105,5 +115,13 @@ export class ConversationManager{
   if(['failed','blocked','cancelled','interrupted'].includes(e.status)&&!this.executions.isActive(e.id)){await this.store.updateConversation(id,v=>{v.steps.find(s=>s.key===step.key)!.status='blocked';v.status='blocked';v.reason=e.reason??'El paso no pudo completarse.';event(v,`blocked:${e.id}:${e.revision}`,`Se detuvo «${step.planTask.title}»: ${v.reason}\nEl trabajo aceptado anterior se conserva. Revisa la evidencia, continúa el checkpoint o reintenta este paso en una copia nueva.`,{kind:'execution',id:e.id});});return;}
   const run=await this.executions.checkpoint(e.id);if(run){const attempt=run.attempts.at(-1);if(attempt&&!c.messages.some(m=>m.key===`phase:${attempt.id}`))await this.store.updateConversation(id,v=>{event(v,`phase:${attempt.id}`,({define:'Definiendo el detalle de',build:'Implementando',review:'Revisando de forma independiente'}[attempt.stage])+` «${step.planTask.title}».`,{kind:'execution',id:e.id});});}
  }
- async shutdown(){this.closed=true;if(this.timer)clearInterval(this.timer);await this.tail;for(const c of (await this.store.readState()).conversations??[])if(['planning','working'].includes(c.status)){await this.store.updateConversation(c.id,v=>{v.status='paused';v.reason='Salem se cerró. Continúa para reconciliar el trabajo guardado.';});await this.stop(c);}}
+ async shutdown(){
+  this.closed=true;if(this.timer)clearInterval(this.timer);await this.tail;
+  // A corrupt catalog must remain untouched. The drained coordinator owns no
+  // native processes; the server separately closes their execution/goal owners.
+  let conversations:ConversationRecord[];try{conversations=(await this.store.readState()).conversations??[];}catch{return;}
+  for(const c of conversations)if(['planning','working'].includes(c.status)||c.resumeAfterCommandKey!==undefined||c.commands.some(cmd=>!c.handledCommands.includes(cmd.key))){
+   await this.store.updateConversation(c.id,v=>{v.status='paused';v.resumeAfterCommandKey=v.commands.at(-1)!.key;v.reason='Salem se cerró. Continúa para reconciliar el trabajo y los mensajes guardados.';});await this.stop(c);
+  }
+ }
 }

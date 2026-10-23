@@ -11,6 +11,33 @@ import {ConversationManager} from '../src/local/conversations.js';
 import type {GoalPlan} from '../src/local/research-contracts.js';
 const until=async<T>(fn:()=>Promise<T|undefined>)=>{const deadline=Date.now()+20000;while(Date.now()<deadline){const v=await fn();if(v)return v;await new Promise(r=>setTimeout(r,20));}throw Error('Coordinator did not reconcile');};
 
+for(const mode of ['abrupt','normal-close','answer-pending'] as const)test(`unprocessed messages require a fresh continue after ${mode}`,async()=>{
+ const root=await mkdtemp(join(tmpdir(),'salem deferred chat ')),store=new LocalStore(root),{project}=await createLocalDemo(store);
+ const goals=new GoalManager(store,{autoStart:false}),executions=new ExecutionManager(store,{autoStart:false});
+ let starts=0;const start=goals.start.bind(goals);goals.start=async request=>{starts++;return start(request);};
+ let chat=new ConversationManager(store,goals,executions,{autoStart:false});await chat.initialize();
+ const initial=await chat.start({projectId:project.id,text:'Conservar la solicitud pendiente',requestKey:'pending-before-close'});
+ if(mode==='answer-pending'){
+  const ready=await store.updateConversation(initial.id,c=>{c.status='needs_input';c.handledCommands.push('pending-before-close');});
+  await chat.command(initial.id,'message',{revision:ready.revision,requestKey:'answer-before-close',text:'El envío cuesta 50 pesos.'});
+ }
+ let c=await store.findConversation(initial.id);
+ // Even a continue persisted before the restart is not new authorization after it.
+ await chat.command(c.id,'continue',{revision:c.revision,requestKey:'old-continue'});
+ if(mode==='normal-close')await chat.shutdown();
+ chat=new ConversationManager(store,goals,executions,{autoStart:false});await chat.initialize();
+ const settle=async()=>{chat.wake();await new Promise(r=>setTimeout(r,120));};
+ try{
+  for(let n=0;n<3;n++)await settle();c=await store.findConversation(initial.id);
+  assert.equal(starts,0,'a persisted message or continue must not call the provider on restart');
+  assert.equal(c.status,'paused');assert.equal((await store.readState()).executions.length,0);
+  const pendingKey=mode==='answer-pending'?'answer-before-close':'pending-before-close';assert.ok(!c.handledCommands.includes(pendingKey),'the pending request must be retained');
+  await chat.command(c.id,'continue',{revision:c.revision,requestKey:'fresh-continue'});
+  await until(async()=>{await settle();return (await store.findConversation(c.id)).goalId??undefined;});
+  assert.equal(starts,1);assert.ok((await store.findConversation(c.id)).handledCommands.includes(pendingKey));
+ }finally{await chat.shutdown();await goals.shutdown();await executions.shutdown();}
+});
+
 test('coordinator recovery reuses an interrupted execution and explicit retry preserves accepted predecessors',async()=>{
  const root=await mkdtemp(join(tmpdir(),'salem chat recovery ')),store=new LocalStore(root),{project}=await createLocalDemo(store);
  const goals=new GoalManager(store,{autoStart:false}),executions=new ExecutionManager(store,{autoStart:false});

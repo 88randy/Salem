@@ -8,6 +8,7 @@ La beta para Windows incorpora una conversación que mantiene el objetivo, el pl
 - Avances vinculados a investigaciones, ejecuciones, cambios y comprobaciones reales.
 - Referencias de texto, borrador persistente, mensajes idempotentes y ajustes posteriores al objetivo.
 - Detener, continuar y reintentar un paso en una copia nueva conservando los resultados aceptados.
+- Recuperar mensajes pendientes tras un cierre sin arrancar agentes hasta recibir una continuación nueva.
 - Respuestas informativas que investigan sin iniciar una implementación innecesaria.
 
 Cada implementación parte del último resultado aceptado en una copia Git propia. La revisión se ejecuta en otra sesión y la última tarea comprueba también el objetivo conjunto. El chat entrega localmente: no crea commits ni publica, integra o despliega de forma implícita.

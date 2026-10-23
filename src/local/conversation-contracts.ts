@@ -19,6 +19,8 @@ export interface ConversationRecord {
  reason:string|null; messages:ChatMessage[]; goalId:string|null; planRevision:number;
  agentId:string; handledCommands:string[];
  failedCommandKey?:string;
+ /** Commands through this key predate recovery; only a newly submitted continue/retry releases them. */
+ resumeAfterCommandKey?:string;
  steps:ConversationStep[]; lastAcceptedExecutionId:string|null;
  commands:{key:string;kind:string;text?:string;references?:ChatReference[]}[];
 }
