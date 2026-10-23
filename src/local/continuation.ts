@@ -1,4 +1,4 @@
-import {copyFile,lstat,mkdir,realpath,unlink,chmod} from 'node:fs/promises';
+import {copyFile,lstat,mkdir,realpath,unlink,chmod,rmdir} from 'node:fs/promises';
 import {dirname,join,resolve,relative} from 'node:path';
 import {repositoryFiles,repositorySnapshot} from '../repository.js';
 import {isInside} from '../config.js';
@@ -15,11 +15,22 @@ export async function copyAcceptedTree(source:string,target:string):Promise<void
  const safe=async(root:string,path:string)=>{
   const file=resolve(root,path),parts=relative(root,file).split(/[\\/]/);
   if(!isInside(root,file)||parts.some(p=>!p||p==='..'||p.toLowerCase()==='.git'))throw localError('Ruta de continuidad fuera del workspace.');
-  let cursor=root;for(const part of parts){cursor=join(cursor,part);try{if((await lstat(cursor)).isSymbolicLink()||await realpath(cursor)!==cursor)throw localError('No se siguen enlaces al copiar la base aceptada.');}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')break;throw e;}}
+  let cursor=root;for(const part of parts){cursor=join(cursor,part);try{if((await lstat(cursor)).isSymbolicLink()||await realpath(cursor)!==cursor)throw localError('No se siguen enlaces al copiar la base aceptada.');}catch(e){if(['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))break;throw e;}}
   return file;
  };
- for(const path of tracked){const origin=await safe(source,path),file=await safe(target,path);let exists=true;try{await lstat(origin);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')exists=false;else throw e;}
-  if(!paths.includes(path)||!exists)await unlink(file).catch(e=>{if(e.code!=='ENOENT')throw e;});}
+ const removedDirectories=new Set<string>();
+ for(const path of tracked){const origin=await safe(source,path),file=await safe(target,path);let exists=true;try{await lstat(origin);}catch(e){if(['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))exists=false;else throw e;}
+  if(!paths.includes(path)||!exists){
+   try{const info=await lstat(file);if(info.isFile())await unlink(file);else if(!info.isDirectory())throw localError('Entrada de destino no admitida.');}catch(e){if(!['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))throw e;}
+   for(let dir=dirname(file);dir!==target&&isInside(target,dir);dir=dirname(dir))removedDirectories.add(dir);
+  }
+ }
+ // Only remove empty directories affected by a tracked deletion. Resolve and
+ // revalidate each exact path; never recursively delete a computed directory.
+ for(const dir of [...removedDirectories].sort((a,b)=>b.length-a.length)){
+  await safe(target,relative(target,dir));
+  try{if((await lstat(dir)).isDirectory())await rmdir(dir);}catch(e){if(!['ENOENT','ENOTDIR','ENOTEMPTY','EEXIST'].includes((e as NodeJS.ErrnoException).code??''))throw e;}
+ }
  for(const path of paths){const origin=await safe(source,path),file=await safe(target,path);let info;try{info=await lstat(origin);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')continue;throw e;}
   if(!info.isFile())throw localError('La base incluye una entrada no admitida.');await mkdir(dirname(file),{recursive:true});await copyFile(origin,file);await chmod(file,info.mode&0o777);}
  const index=join(before.gitDir,'index');if(!(await lstat(index)).isFile()||(await lstat(index)).isSymbolicLink())throw localError('Índice de base inválido.');

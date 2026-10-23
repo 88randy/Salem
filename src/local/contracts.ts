@@ -36,7 +36,7 @@ export interface ExecutionRecord {
   baseExecutionId?: string;
 }
 export interface LocalState {
-  schemaVersion: 1; revision: number;
+  schemaVersion: 1 | 2; revision: number;
   settings: LocalSettings; projects: ProjectRecord[]; tasks: TaskRecord[];
   executions: ExecutionRecord[];
   goals?: import("./research-contracts.js").GoalRecord[];

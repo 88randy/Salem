@@ -83,7 +83,7 @@ export class ConversationManager{
     if(step?.executionId){
      if(command.kind==='retry')await this.store.updateConversation(id,v=>{const next=v.steps.find(s=>s.key===step.key)!;next.executionId=null;next.status='pending';next.attempt++;});
      else await this.executions.resumeManaged(step.executionId);
-     await this.store.updateConversation(id,v=>{v.status='working';v.reason=null;v.handledCommands.push(command.key);event(v,`continue:${command.key}`,command.kind==='retry'?'Reintento este paso en una copia nueva del último resultado aceptado.':'Reconcilio el checkpoint guardado para continuar.');});return;
+     await this.store.updateConversation(id,v=>{if(command.kind==='continue')v.steps.find(s=>s.key===step.key)!.status='running';v.status='working';v.reason=null;v.handledCommands.push(command.key);event(v,`continue:${command.key}`,command.kind==='retry'?'Reintento este paso en una copia nueva del último resultado aceptado.':'Reconcilio el checkpoint guardado para continuar.');});return;
     }
     if(c.goalId){const goal=await this.store.findGoal(c.goalId);if(['cancelled','failed','blocked','interrupted'].includes(goal.status))await this.goals.retry(goal.id,goal.revision);}
     await this.store.updateConversation(id,v=>{v.status=c.steps.some(s=>s.key.startsWith(c.goalId+':'))?'working':'planning';v.reason=null;v.handledCommands.push(command.key);});return;

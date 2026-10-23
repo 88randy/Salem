@@ -8,23 +8,34 @@ import './conversation.css';
 
 export const chatStatus:Record<ConversationRecord['status'],string>={planning:'Investigando',needs_input:'Necesita tu respuesta',working:'Trabajando',paused:'En pausa',blocked:'Necesita atención',completed:'Completado',answered:'Respuesta lista'};
 function initialDraft(id:string):{text:string;references:ChatReference[]}{try{const r=JSON.parse(sessionStorage.getItem(`salem.chat.draft.${id}`)??'null');if(r&&typeof r.text==='string'&&Array.isArray(r.references))return r;}catch{}return {text:'',references:[]};}
+function pendingRequest(id:string):{signature:string;key:string}{try{const r=JSON.parse(sessionStorage.getItem(`salem.chat.draft.${id}`)??'null')?.pending;if(r&&typeof r.signature==='string'&&typeof r.key==='string'&&r.key.length<=120)return r;}catch{}return {signature:'',key:''};}
 function InlineText({text}:{text:string}){return <>{text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g).map((part,i)=>part.startsWith('**')?<strong key={i}>{part.slice(2,-2)}</strong>:part.startsWith('`')?<code key={i}>{part.slice(1,-1)}</code>:part.startsWith('[')&&/^\[[^\]]+\]\(https?:\/\//.test(part)?<a key={i} href={part.slice(part.indexOf('](')+2,-1)} target="_blank" rel="noreferrer">{part.slice(1,part.indexOf(']('))}</a>:part)}</>;}
 function MessageText({text}:{text:string}){return <>{text.split(/(```[\s\S]*?```)/g).map((part,i)=>part.startsWith('```')?<pre key={i}><code>{part.replace(/^```[^\n]*\n?/,'').replace(/```$/,'')}</code></pre>:<div key={i} className="chat-prose">{part.split('\n').map((line,at)=>/^#{1,4} /.test(line)?<strong className="chat-prose-title" key={at}><InlineText text={line.replace(/^#{1,4} /,'')}/></strong>:<div key={at}><InlineText text={line||'\u00a0'}/></div>)}</div>)}</>;}
 
 export function ConversationPage({conversation:c,state,onChanged,onExecution,onBack}:{conversation:ConversationRecord;state:LocalState;onChanged:()=>Promise<void>;onExecution:(id:string)=>void;onBack:()=>void}){
  const [draft,setDraft]=useState(()=>initialDraft(c.id));const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [panel,setPanel]=useState(false);
- const request=useRef({signature:'',key:''});const actions=useRef(new Map<string,string>());const end=useRef<HTMLDivElement>(null);const log=useRef<HTMLDivElement>(null);const nearEnd=useRef(true);const [unread,setUnread]=useState(false);const mounted=useRef(true);
+ const request=useRef(pendingRequest(c.id));const actions=useRef(new Map<string,string>());const end=useRef<HTMLDivElement>(null);const log=useRef<HTMLDivElement>(null);const nearEnd=useRef(true);const [unread,setUnread]=useState(false);const mounted=useRef(true);
  const running=c.status==='working'||c.status==='planning';const steps=c.steps.filter(s=>s.key.startsWith(c.goalId+':'));const accepted=steps.filter(s=>s.status==='accepted').length;
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
- useEffect(()=>{try{sessionStorage.setItem(`salem.chat.draft.${c.id}`,JSON.stringify(draft));}catch{}},[draft,c.id]);
+ useEffect(()=>{try{sessionStorage.setItem(`salem.chat.draft.${c.id}`,JSON.stringify({...draft,pending:request.current.key?request.current:undefined}));}catch{}},[draft,c.id]);
  useEffect(()=>{if(nearEnd.current)end.current?.scrollIntoView({block:'nearest'});else setUnread(true);},[c.messages.length]);
  useEffect(()=>{actions.current.clear();},[c.status]);
  async function send(){
   if(!draft.text.trim()||busy)return;
   const input={text:draft.text.trim(),references:draft.references},signature=JSON.stringify(input);if(request.current.signature!==signature)request.current={signature,key:crypto.randomUUID()};
   setBusy(true);setError('');
-  try{await api(`/conversations/${c.id}/message`,{...input,revision:c.revision,requestKey:request.current.key});if(!mounted.current)return;setDraft({text:'',references:[]});nearEnd.current=true;await onChanged();}
-  catch(e){if(mounted.current)setError(e instanceof Error?e.message:'No se pudo enviar. Tu mensaje se conserva.');}
+  try{
+   // Persist before sending so a lost response followed by remount uses the
+   // same command identity. Storage failure must not submit an untracked command.
+   try{sessionStorage.setItem(`salem.chat.draft.${c.id}`,JSON.stringify({...draft,pending:request.current}));}catch{throw Error('No se pudo conservar la identidad del mensaje en esta pestaña. No se envió; tu borrador se conserva.');}
+   await api(`/conversations/${c.id}/message`,{...input,revision:c.revision,requestKey:request.current.key});
+   // A reopened chat owns its own draft. An old, unmounted request cannot
+   // acknowledge or remove storage that the new instance may have edited.
+   if(!mounted.current)return;
+   request.current={signature:'',key:''};sessionStorage.removeItem(`salem.chat.draft.${c.id}`);
+   setDraft({text:'',references:[]});nearEnd.current=true;await onChanged();
+  }
+  catch(e){if(mounted.current)setError(e instanceof TypeError?'No se confirmó el envío. Tu mensaje se conserva; vuelve a enviarlo para reconciliarlo sin duplicarlo.':e instanceof Error?e.message:'No se pudo enviar. Tu mensaje se conserva.');}
   finally{if(mounted.current)setBusy(false);}
  }
  async function action(kind:'pause'|'continue'|'retry'){

@@ -76,12 +76,14 @@ export class ExecutionManager {
   if(e.status==="queued")return this.store.patchExecution(id,{status:"cancelled",reason:"Cancelada antes de iniciar.",finishedAt:Date.now()});
   return e;
  });}
- async resumeManaged(id:string):Promise<ExecutionRecord>{const e=await this.store.findExecution(id),c=e.conversationId?await this.store.findConversation(e.conversationId):null;
-  if(!c||!c.steps.some(s=>s.executionId===id&&s.key.startsWith(c.goalId+':')&&s.status!=='accepted'))throw localError('La ejecución no pertenece al paso vigente de la conversación.',409);
-  return this.resume(id,true);
- }
+ async resumeManaged(id:string):Promise<ExecutionRecord>{return this.resume(id,true);}
  async resume(id:string,managed=false):Promise<ExecutionRecord>{return this.serialized(async()=>{
-  const e=await this.store.findExecution(id);if(this.active.has(id)||e.status==="completed"||e.status==="queued")return e;
+  const e=await this.store.findExecution(id);
+  if(managed){const state=await this.store.readState(),c=state.conversations?.find(c=>c.id===e.conversationId);
+   if(!c||!c.steps.some(s=>s.executionId===id&&s.key.startsWith(c.goalId+':')&&s.status!=='accepted'))throw localError('La ejecución no pertenece al paso vigente de la conversación.',409);
+   if(!state.projects.some(p=>p.id===c.projectId&&!p.archived&&p.revision===c.project.revision&&p.revision===e.project.revision))throw localError('El perfil cambió. Inicia una conversación con su configuración actual; el código anterior se conserva.',409);
+  }
+  if(this.active.has(id)||e.status==="completed"||e.status==="queued")return e;
   if(e.conversationId&&!managed)throw localError('Continúa esta ejecución desde su conversación.',409);
   const run=await this.readRun(e,true).catch(()=>null);
   if(!run||!e.workspace)return this.store.patchExecution(id,{status:"blocked",reason:"No hay un checkpoint nativo verificable para reanudar. Conserva la evidencia; puedes repetir como una nueva ejecución aislada.",finishedAt:Date.now()});
@@ -97,7 +99,10 @@ export class ExecutionManager {
    await this.serialized(async()=>{
     const current=await this.store.readState(),e=current.executions.find(item=>item.id===candidate.id);
     if(this.closed||this.active.size+(this.options.additionalActive?.()??0)>=current.settings.maxConcurrentRuns||!e||e.status!=="queued"||this.active.has(e.id)||providers(e).some(p=>this.options.canStart?.(p)===false))return;
-    if(e.conversationId&&!current.conversations?.some(c=>c.id===e.conversationId&&c.status==='working'&&c.steps.some(s=>s.executionId===e.id&&s.key.startsWith(c.goalId+':')&&s.status==='running')))return;
+    if(e.conversationId){const c=current.conversations?.find(c=>c.id===e.conversationId);
+     if(!c||c.status!=='working'||!c.steps.some(s=>s.executionId===e.id&&s.key.startsWith(c.goalId+':')&&s.status==='running'))return;
+     if(!current.projects.some(p=>p.id===c.projectId&&!p.archived&&p.revision===c.project.revision&&p.revision===e.project.revision)){await this.store.patchExecution(e.id,{status:'blocked',reason:'El perfil cambió. Inicia una conversación con su configuración actual; el código anterior se conserva.',finishedAt:Date.now()});return;}
+    }
     const controller=new AbortController();
     // Reserve synchronously with the account predicate; execution starts only
     // after the active reservation is visible to cancellation and account changes.

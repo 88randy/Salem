@@ -1,4 +1,5 @@
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, copyFile } from "node:fs/promises";
+import { constants } from 'node:fs';
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseGoalPlan } from "./planning.js";
@@ -21,7 +22,7 @@ export class LocalStore {
     await mkdir(this.root,{recursive:true});
     try{await stat(join(this.root,"catalog.json"));}
     catch(e){if((e as NodeJS.ErrnoException).code!=="ENOENT")throw e;
-      const value:LocalState={schemaVersion:1,revision:1,settings:defaultSettings(),projects:[],tasks:[],executions:[],goals:[]};
+      const value:LocalState={schemaVersion:2,revision:1,settings:defaultSettings(),projects:[],tasks:[],executions:[],goals:[]};
       await atomicJson(join(this.root,"catalog.json"),{checksum:digest(value),value});}
   }
   async readState():Promise<LocalState>{
@@ -30,7 +31,7 @@ export class LocalStore {
       if((await stat(join(this.root,"catalog.json"))).size>MAX_CATALOG_BYTES)throw new Error("tamaño excedido");
       const envelope=JSON.parse(await readFile(join(this.root,"catalog.json"),"utf8")) as {checksum:string;value:LocalState};
       const s=envelope.value;
-      if(!s||s.schemaVersion!==1||!Number.isSafeInteger(s.revision)||!Array.isArray(s.projects)||!Array.isArray(s.tasks)||!Array.isArray(s.executions)||(s.goals!==undefined&&!Array.isArray(s.goals))||digest(s)!==envelope.checksum)throw new Error("integridad inválida");
+      if(!s||![1,2].includes(s.schemaVersion)||!Number.isSafeInteger(s.revision)||!Array.isArray(s.projects)||!Array.isArray(s.tasks)||!Array.isArray(s.executions)||(s.goals!==undefined&&!Array.isArray(s.goals))||digest(s)!==envelope.checksum)throw new Error("integridad inválida o versión de catálogo no compatible");
       if(s.evolutions!==undefined&&!Array.isArray(s.evolutions))throw new Error('Evolución inválida');
       if(s.conversations!==undefined&&!Array.isArray(s.conversations))throw new Error('Conversaciones inválidas');
       validateSettings(s.settings);
@@ -39,6 +40,12 @@ export class LocalStore {
   }
   private async change<T>(fn:(state:LocalState)=>Promise<T>|T):Promise<T>{
     const run=this.tail.then(async()=>{const s=await this.readState(),result=await fn(s);s.revision++;
+      if(s.schemaVersion===1){
+        // Preserve the exact old catalog before the first v2 mutation. Older apps
+        // reject v2 rather than execute managed records without their coordinator.
+        await copyFile(join(this.root,'catalog.json'),join(this.root,`catalog.v1-backup-${randomUUID()}.json`),constants.COPYFILE_EXCL);
+        s.schemaVersion=2;
+      }
       const envelope={checksum:digest(s),value:s};
       if(Buffer.byteLength(JSON.stringify(envelope))>MAX_CATALOG_BYTES)throw localError("El catálogo excede el límite de tamaño; los datos anteriores se conservaron.",413);
       await atomicJson(join(this.root,"catalog.json"),envelope);return structuredClone(result);});

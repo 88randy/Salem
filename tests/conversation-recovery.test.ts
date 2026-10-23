@@ -36,6 +36,9 @@ test('coordinator recovery reuses an interrupted execution and explicit retry pr
  assert.equal((await store.readState()).executions.filter(e=>e.conversationId===c.id).length,2);assert.equal((await store.findConversation(c.id)).steps[1]!.executionId,second);
  await store.patchExecution(second,{status:'completed'});const third=await execution(2);await store.patchExecution(third,{status:'failed',reason:'Cuota de fixture agotada'});await tick();
  current=await until(async()=>{await tick();const v=await store.findConversation(c.id);return v.status==='blocked'?v:undefined;});assert.match(current.messages.at(-1)!.text,/Cuota/);assert.equal(current.lastAcceptedExecutionId,second);
+ await chat.command(c.id,'continue',{revision:current.revision,requestKey:'resume-blocked'});await tick();
+ current=await until(async()=>{await tick();const v=await store.findConversation(c.id);return v.handledCommands.includes('resume-blocked')?v:undefined;});assert.equal(current.status,'working');assert.equal(current.steps[2]!.status,'running','a resumed blocked step must open its durable execution queue gate');assert.equal((await store.findExecution(third)).status,'queued');
+ await store.patchExecution(third,{status:'failed',reason:'Fixture fails again'});current=await until(async()=>{await tick();const v=await store.findConversation(c.id);return v.status==='blocked'?v:undefined;});
  await chat.command(c.id,'retry',{revision:current.revision,requestKey:'retry'});
  const retried=await until(async()=>{await tick();const v=await store.findConversation(c.id);return v.steps[2]!.executionId&&v.steps[2]!.executionId!==third?v.steps[2]!.executionId:undefined;});
  assert.equal((await store.findExecution(retried)).continuationId,second);await store.patchExecution(retried,{status:'completed'});

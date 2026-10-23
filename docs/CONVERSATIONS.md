@@ -28,6 +28,8 @@ Todos los checks requeridos del perfil se mantienen en cada paso. Los criterios 
 
 Mensajes, revisiones, tareas, ejecuciones y eventos se conservan en el catálogo local con checksum y escritura atómica. Repetir una solicitud con la misma clave no duplica la operación. El servidor mantiene el bloqueo exclusivo de la instalación. Tras un cierre, el trabajo interrumpido requiere una continuación explícita; los pasos aceptados no vuelven a ejecutarse por abrir la conversación.
 
+La versión 0.5 usa el formato de catálogo 2. Lee los datos anteriores y, antes de la primera modificación, conserva una copia exacta `catalog.v1-backup-<id>.json` en la carpeta de datos. Las versiones 0.4 y anteriores rechazan el catálogo nuevo: no deben ejecutar sus tareas sin el coordinador conversacional. Para volver a una versión anterior, conserva primero todos los datos actuales y utiliza una copia separada del respaldo previo a la migración; ese respaldo no contiene el trabajo posterior. Reinstalar una versión antigua no convierte ni restaura automáticamente el catálogo.
+
 Los mensajes de Salem citan su investigación o ejecución de origen. El chat presenta avances del controlador y resultados reales; no reconstruye una transcripción inventada de Claude o Codex ni muestra salida del proceso como si fuera una conversación humana.
 
 La entrega conversacional es local. El resultado permanece en la última copia aceptada, accesible desde el detalle. Publicar, integrar o desplegar requiere un flujo explícito de entrega con sus capacidades delegadas; iniciar el chat no publica automáticamente.
