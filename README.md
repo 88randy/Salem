@@ -57,15 +57,11 @@ Salem investiga primero. Si falta la política de envío, te pregunta; con tu re
 
 ```mermaid
 flowchart LR
-    A[Tu objetivo] --> B[Investigar y aclarar]
-    B -->|Pregunta de producto| A
-    B --> C[Plan de tareas]
-    C --> D[Implementar un paso]
-    D --> E{Checks y revisión independiente}
-    E -->|Corregir dentro de límites| D
-    E -->|Siguiente tarea| D
-    E -->|Objetivo completo| F[Resultado y evidencia]
-    E -->|Límite o bloqueo| G[Pausa recuperable]
+    A[Tu objetivo] --> B[Investigar y planear]
+    B --> C[Implementar un paso]
+    C --> D[Checks y revisión]
+    D -->|Corregir o siguiente tarea| C
+    D -->|Objetivo cumplido| E[Resultado y evidencia]
 ```
 
 **Salem orquesta; los modelos investigan, implementan y revisan.** El plan puede asignar cada implementación a un agente permitido por el perfil. Los proveedores, modelos, esfuerzos, roles y límites se configuran por proyecto. Una revisión debe realizarse en una sesión independiente de la implementación, aunque utilices un solo proveedor.
