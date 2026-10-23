@@ -27,10 +27,12 @@ Puedes trabajar con Claude, con Codex o con ambos. Salem utiliza los CLIs oficia
 
 ![Conversación de Salem: un objetivo, el avance y las tareas del plan con acceso a sus comprobaciones](.github/assets/salem.jpg)
 
-*Demo local de gestión conversacional. La captura muestra trabajo real en una copia aislada; las funciones incluidas en cada descarga se detallan en sus notas de versión.*
+*Demo local con Codex: tres pasos aceptados y objetivo completado en una copia aislada. Las funciones incluidas en cada descarga se detallan en sus notas de versión.*
 
 > [!NOTE]
 > **Beta local para Windows x64.** Este README describe la rama actual. Revisa [Releases](https://github.com/88randy/Salem/releases) para conocer las funciones y validaciones del instalador que descargues, y los [PR abiertos](https://github.com/88randy/Salem/pulls) para seguir el trabajo aún en desarrollo.
+
+[Novedades y compatibilidad de la versión conversacional 0.5 →](docs/RELEASE-0.5.0.md)
 
 ## Qué aporta a tu trabajo
 
