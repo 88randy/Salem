@@ -1,26 +1,102 @@
-# Salem
+<p align="center">
+  <img src="ui/public/salem.svg" width="72" alt="Salem, el gato violeta">
+</p>
 
-[![CI Windows](https://github.com/88randy/Salem/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/88randy/Salem/actions/workflows/ci.yml)
+<h1 align="center">Salem</h1>
 
-Un espacio local para trabajar con Claude y Codex sobre tus proyectos de software.
+<p align="center"><strong>De un objetivo a cambios comprobados, con Claude y Codex.</strong></p>
 
-Describe un objetivo en el chat. Salem investiga el repositorio, te hace las preguntas necesarias, crea las tareas y coordina implementación, pruebas y revisión con las cuentas que ya utilizas. Tú eliges los modelos, los límites y las acciones que puede realizar.
+<p align="center">
+  <a href="https://github.com/88randy/Salem/actions/workflows/ci.yml"><img src="https://github.com/88randy/Salem/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI de Windows"></a>
+  <a href="https://github.com/88randy/Salem/releases"><img src="https://img.shields.io/github/v/release/88randy/Salem?include_prereleases&label=release" alt="Última versión publicada"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Licencia MIT"></a>
+  <img src="https://img.shields.io/badge/Windows-x64-7054a8.svg" alt="Windows x64">
+</p>
 
-**Beta local para Windows.** Consulta las [notas de la interfaz 0.4.0](docs/RELEASE-0.4.0.md) y los resultados de Actions para conocer la validación y sus límites. Código abierto bajo [MIT](LICENSE).
+<p align="center">
+  <a href="#empezar">Empezar</a> ·
+  <a href="#cómo-funciona">Cómo funciona</a> ·
+  <a href="#qué-aporta-a-tu-trabajo">Qué aporta</a> ·
+  <a href="#documentación">Documentación</a> ·
+  <a href="#contribuir">Contribuir</a>
+</p>
 
-![Inicio de Salem](.github/assets/salem.jpg)
+Salem es una aplicación local de **gestión de proyectos de software con agentes de IA**. Le explicas qué quieres conseguir y mantiene el hilo del trabajo: investiga el repositorio, aclara lo que falta, prepara tareas dependientes y coordina implementación, pruebas y revisión.
+
+Puedes trabajar con Claude, con Codex o con ambos. Salem utiliza los CLIs oficiales y las cuentas que conectes en tu computadora. Tú eliges los modelos y delegas los permisos; el controlador conserva el estado y comprueba la aceptación de cada resultado.
+
+![Conversación de Salem: un objetivo, el avance y las tareas del plan con acceso a sus comprobaciones](.github/assets/salem.jpg)
+
+*Demo local de gestión conversacional. La captura muestra trabajo real en una copia aislada; las funciones incluidas en cada descarga se detallan en sus notas de versión.*
+
+> [!NOTE]
+> **Beta local para Windows x64.** Este README describe la rama actual. Revisa [Releases](https://github.com/88randy/Salem/releases) para conocer las funciones y validaciones del instalador que descargues, y los [PR abiertos](https://github.com/88randy/Salem/pulls) para seguir el trabajo aún en desarrollo.
+
+## Qué aporta a tu trabajo
+
+Un cambio suele exigir entender el código, decidir por dónde empezar, repartir tareas, revisar resultados y retomar lo pendiente. Salem conserva esa gestión en una conversación con su plan y sus evidencias.
+
+| Lo que necesitas | Cómo te ayuda Salem |
+| --- | --- |
+| Pasar de una idea a un plan ejecutable | Investiga el proyecto, identifica dependencias y divide el objetivo en tareas con criterios de aceptación. |
+| Avanzar con pocas instrucciones | Toma decisiones técnicas dentro del perfil del proyecto. Cuando falta una decisión de producto que no puede deducir, te pregunta en el chat. |
+| Aprovechar tus agentes | Asigna implementaciones a los agentes permitidos y conserva los roles de definición y revisión que configuraste. |
+| Saber si el cambio funciona | Ejecuta los checks del proyecto y exige revisión en otra sesión. La última tarea comprueba también el resultado conjunto. |
+| Retomar sin perder el contexto | Guarda mensajes, planes, intentos, resultados y checkpoints. Conserva el trabajo aceptado cuando un paso falla. |
+| Entender qué pasó | Te muestra avances y permite abrir el diff, los checks, los logs y el uso reportado por cada ejecución. |
+
+El beneficio es dedicar menos atención a trasladar contexto y coordinar cada paso. El tiempo y las iteraciones se pueden medir; Salem no presenta estimaciones de ahorro como resultados demostrados.
+
+## Cómo funciona
+
+Escribe, por ejemplo:
+
+> «Completa el carrito: calcula el subtotal, aplica la política de envío y comprueba el total. Conserva la API y los verificadores existentes.»
+
+Salem investiga primero. Si falta la política de envío, te pregunta; con tu respuesta prepara el plan y trabaja paso a paso. Puedes precisar el objetivo, adjuntar referencias de texto, detener el trabajo o revisar sus resultados desde el mismo chat.
+
+```mermaid
+flowchart TD
+    A[Describes el objetivo] --> B[Salem investiga el proyecto]
+    B --> C{¿Falta una decisión de producto?}
+    C -->|Sí| D[Te pregunta en el chat]
+    D --> B
+    C -->|No| E[Prepara tareas y dependencias]
+    E --> F[La IA implementa un paso en una copia aislada]
+    F --> G{¿Pasan los checks del paso?}
+    G -->|Sí| H[Otra sesión revisa el resultado]
+    H --> I{¿Cumple la aceptación?}
+    G -->|No| J{¿Queda margen dentro de los límites?}
+    I -->|No| J
+    J -->|Sí| F
+    J -->|No| K[Se detiene y explica qué necesita]
+    I -->|Sí| L{¿Quedan tareas?}
+    L -->|Sí| F
+    L -->|No| M[Resultado conjunto comprobado y evidencia local]
+```
+
+**Salem orquesta; los modelos investigan, implementan y revisan.** El plan puede asignar cada implementación a un agente permitido por el perfil. Los proveedores, modelos, esfuerzos, roles y límites se configuran por proyecto. Una revisión debe realizarse en una sesión independiente de la implementación, aunque utilices un solo proveedor.
+
+Cada paso parte del último código aceptado, en una copia Git independiente. Un intento fallido conserva su evidencia y la base anterior. Si cambias las instrucciones, Salem detiene el trabajo en curso antes de preparar otra revisión del plan. Si el proveedor rechaza un modelo o agota su cuota, el flujo se detiene y lo informa; no cambia silenciosamente tu elección.
+
+La conversación entrega el resultado **localmente**. Publicar, integrar o desplegar se realiza mediante un flujo explícito de entrega y sus permisos delegados. [Leer la guía del chat →](docs/CONVERSATIONS.md)
 
 ## Empezar
 
-### Windows: aplicación instalada
+### Aplicación para Windows
 
-Descarga el instalador de [Releases](https://github.com/88randy/Salem/releases). La distribución incluye Node.js y abre Salem en tu navegador. Git y los CLIs oficiales de [Claude Code](https://code.claude.com/docs/en/setup) y [Codex](https://developers.openai.com/codex/cli) se instalan por separado.
+1. Descarga el instalador de [Releases](https://github.com/88randy/Salem/releases). Incluye Node.js; necesitas Git y los CLIs oficiales de [Claude Code](https://code.claude.com/docs/en/setup) o [Codex](https://developers.openai.com/codex/cli).
+2. Abre Salem y entra a **Cuentas** para comprobar o conectar los proveedores que vayas a utilizar.
+3. En **Proyectos**, incorpora una carpeta Git y revisa las comprobaciones detectadas, los agentes y los permisos.
+4. Ve a **Inicio**, elige el proyecto y describe lo que quieres lograr.
 
-La [guía de Windows](docs/WINDOWS.md) explica instalación, arranque, actualización y desinstalación. Los datos se conservan fuera de la carpeta de la aplicación. El instalador inicial no tiene firma digital; las descargas incluyen hashes para comprobar su integridad.
+Cada persona utiliza su propia computadora y sus propias cuentas. Si tus CLIs ya trabajan con una sesión de tu cuenta, Salem puede utilizarla sin pedirte otra API key. Las llamadas a modelos consumen la cuota o los créditos de esa cuenta.
+
+[Instalación, actualización y desinstalación →](docs/WINDOWS.md)
 
 ### Desde el código fuente
 
-Requiere Node.js22, npm y Git:
+Requiere **Node.js 22**, npm y Git:
 
 ```sh
 git clone https://github.com/88randy/Salem.git
@@ -29,49 +105,55 @@ npm ci
 npm run salem
 ```
 
-Abre la dirección que imprime la terminal, normalmente `http://127.0.0.1:3210`. En **Cuentas**, comprueba o conecta las sesiones oficiales de los proveedores que vayas a usar. Cada persona utiliza su propia computadora y sus propias cuentas. No necesitas una API key cuando el CLI utiliza tu sesión existente. El uso de modelos consume la cuota o los créditos de esa cuenta.
+Abre la dirección que imprime la terminal, normalmente `http://127.0.0.1:3210`. La interfaz se abre en tu navegador y el servidor escucha en tu equipo.
 
-## Qué puedes hacer
+## Qué puedes pedirle
 
-- **Incorporar proyectos:** detecta instrucciones, tecnologías y checks en una revisión Git local, sin ejecutar scripts durante la detección.
-- **Plantear objetivos:** investiga el código, identifica supuestos y preguntas, y prepara un plan con evidencia y criterios de aceptación.
-- **Gestionar desde el chat:** conversa sobre el objetivo, responde aclaraciones y ajusta las instrucciones. Salem coordina tareas dependientes y comprueba el resultado conjunto; el plan y sus evidencias quedan accesibles desde la conversación.
-- **Coordinar Claude y Codex:** asigna agentes a definición, implementación y revisión. El perfil inicial propone Opus5.5 con esfuerzo medio para definir/revisar y GPT-6.1 Sol para implementar; puedes cambiar modelos y roles.
-- **Ejecutar y comprobar:** trabaja en una copia aislada, ejecuta los checks del proyecto y exige revisión en otra sesión antes de aceptar código.
-- **Seguir y recuperar:** conserva estado, etapas, diffs, logs y recibos. Permite cancelar, reanudar desde checkpoints verificables o iniciar otra ejecución conservando la anterior.
-- **Entregar con permisos explícitos:** configura commits, PR, integración o despliegue cuando quieras delegar esas acciones. Registrar un proyecto no las habilita.
-- **Probar mejoras:** reproduce un fallo con la aceptación existente, evalúa una candidata y puede aplicarla con respaldo. Repite los checks y ofrece reversión y recuperación ante una interrupción.
-- **Medir:** muestra tiempos, iteraciones y uso reportado por los proveedores. Los datos desconocidos permanecen desconocidos; no se presentan como ahorro demostrado.
+| Ejemplo de objetivo | Qué hace el flujo |
+| --- | --- |
+| «Investiga por qué falla este cálculo y corrígelo conservando la API.» | Investiga la causa, prepara el trabajo y comprueba la corrección. |
+| «Agrega esta validación y cubre los casos límite con los checks del proyecto.» | Organiza los pasos, implementa y exige aceptación verificable. |
+| «Explícame cómo funciona este módulo antes de cambiarlo.» | Puede responder tras investigar, sin iniciar una implementación. |
+| «Continúa con este ajuste y conserva lo que ya está aceptado.» | Replantea lo pendiente sobre el último resultado aceptado. |
 
-## Cómo colaboran las IA
+El contexto y las comprobaciones del repositorio importan. Salem puede detectar tecnologías, instrucciones y checks al incorporarlo; los verificadores nuevos propuestos por un agente requieren revisar explícitamente el perfil. La conversación no altera sus propias reglas de aceptación para conseguir un resultado verde.
 
-La interfaz reúne tu trabajo en una navegación lateral con proyectos y recientes. Desde **Inicio** puedes investigar un objetivo sin preparar manualmente una tarea. **Buscar** (Ctrl+K) encuentra proyectos, tareas, objetivos, ejecuciones y mejoras. **Actividad** reúne los procesos en curso y su historial; cada resultado abre su detalle. Las ejecuciones muestran el contexto y los agentes a un lado, con checks, cambios, logs, métricas y entrega en sus pestañas.
+## También incluye
 
-En **Ajustes** puedes elegir tema claro, oscuro o del sistema. Esta preferencia se guarda en el navegador, separada de los ajustes del servidor y de los perfiles de proyecto.
+- **Espacio de trabajo:** proyectos, conversaciones, búsqueda, recientes y actividad. Las herramientas avanzadas conservan acceso a tareas, investigaciones y ejecuciones individuales.
+- **Perfiles de proyecto:** agentes, modelos, preparación del entorno, checks, capacidades y presupuestos de tiempo, intentos y uso.
+- **Recuperación:** estado durable, pausas, cancelación de procesos propios y continuación desde checkpoints verificables.
+- **Entrega delegada:** commits, PR, integración y despliegue cuando configuras y autorizas esas capacidades.
+- **Evolución con pruebas:** propone y evalúa mejoras con la aceptación existente; puede aplicar una candidata validada con respaldo y reversión.
+- **Métricas:** tiempos, iteraciones y uso informado por los proveedores. Los valores no reportados permanecen desconocidos.
 
-Salem es el controlador del flujo. Las IA investigan, proponen, implementan y revisan; el controlador conserva el estado y comprueba las reglas. Puedes usar ambos proveedores o configurar uno solo. No hace falta que compartan credenciales ni que editen simultáneamente los mismos archivos.
+## Tus datos, permisos y límites
 
-Los modelos y esfuerzos se configuran por agente en **Proyectos → Agentes y etapas**. Hay opciones sugeridas, el predeterminado del CLI y un valor personalizado. La disponibilidad depende de tu cuenta, cliente y organización. Salem no cambia silenciosamente el modelo si el proveedor lo rechaza. Los perfiles existentes conservan sus elecciones.
+Los proyectos y evidencias permanecen en tu equipo. Las credenciales siguen en el almacenamiento oficial de cada CLI; las consultas a modelos envían contexto al proveedor correspondiente. El servidor escucha únicamente en `127.0.0.1`.
 
-## Tus datos y tu control
+Editar, crear commits, publicar, integrar y desplegar son capacidades separadas. Registrar un proyecto no las habilita todas. La autoevolución tampoco puede cambiar verificadores, instrucciones, permisos o reglas de aceptación.
 
-El servidor escucha únicamente en `127.0.0.1`. Las sesiones permanecen en el almacenamiento oficial de cada CLI. Salem conserva proyectos, configuraciones y evidencias en tu equipo; las consultas a modelos sí requieren conexión y envían contexto al proveedor correspondiente.
+La beta tiene límites concretos:
 
-Los permisos de editar, crear commits, publicar, integrar y desplegar se delegan por separado. La autoevolución no puede cambiar las reglas de aceptación, verificadores, instrucciones o permisos. Aplicar una mejora modifica código fuente; no sustituye automáticamente el programa instalado.
+- Se verifica en **Windows x64**. No se acredita compatibilidad con otros sistemas, navegadores o dispositivos por pasar una demo local.
+- El coordinador ejecuta **una tarea a la vez por conversación**. Las referencias adjuntas del chat son archivos de texto UTF-8.
+- El instalador aún **no tiene firma digital**. Las descargas incluyen hashes de integridad.
+- Los agentes y checks corren con tu usuario. Una copia Git y los límites de herramientas no constituyen una sandbox del sistema operativo.
 
-Los agentes y checks se ejecutan con tu usuario del sistema. Una copia Git y los límites de herramientas no constituyen una sandbox frente a código malicioso. Revisa los proyectos y comandos que decidas ejecutar. Lee [seguridad](SECURITY.md) antes de exponer datos o reportar un problema.
+Consulta [seguridad](SECURITY.md) y las [notas de versión](https://github.com/88randy/Salem/releases) antes de decidir qué trabajo delegar.
 
 ## Documentación
 
-- [Guía completa de Salem](docs/SALEM.md)
-- [Gestión conversacional](docs/CONVERSATIONS.md)
-- [Windows: instalar y operar](docs/WINDOWS.md)
-- [Modelos y colaboración](docs/MODELS.md)
-- [Supervisor y recuperación](docs/SUPERVISOR.md)
-- [Checks y aceptación](docs/CHECKS.md)
-- [Entrega y capacidades](docs/DELIVERY.md)
-- [Métricas y sus límites](docs/METRICS.md)
-- [Contribuir](CONTRIBUTING.md)
+| Guía | Para qué sirve |
+| --- | --- |
+| [Gestión conversacional](docs/CONVERSATIONS.md) | Objetivos, preguntas, tareas, continuidad y resultados del chat. |
+| [Windows](docs/WINDOWS.md) | Instalar, actualizar, operar y conservar los datos. |
+| [Modelos y colaboración](docs/MODELS.md) | Configurar proveedores, modelos, esfuerzos y roles. |
+| [Checks y aceptación](docs/CHECKS.md) | Entender qué permite aceptar o detener un cambio. |
+| [Supervisor y recuperación](docs/SUPERVISOR.md) | Checkpoints, interrupciones y continuación. |
+| [Entrega y capacidades](docs/DELIVERY.md) | Delegar commits, PR, integración o despliegue. |
+| [Métricas](docs/METRICS.md) | Interpretar mediciones y sus límites. |
+| [Guía completa](docs/SALEM.md) | Consultar el funcionamiento general del framework. |
 
 ## Desarrollo
 
@@ -84,10 +166,14 @@ npm run test:ui
 npm run test:distribution
 ```
 
-Las pruebas automatizadas utilizan subprocess de fixtures y no consumen cuota de IA. Las pruebas con cuentas reales se ejecutan por separado y se identifican como tales. Para usar Chrome instalado en vez del Chromium de Playwright, define `PLAYWRIGHT_CHANNEL=chrome`.
+Las pruebas automatizadas usan procesos de fixtures y no consumen cuota de IA. Las pruebas con cuentas reales se ejecutan por separado y se identifican como tales. Para usar Chrome instalado, define `PLAYWRIGHT_CHANNEL=chrome`.
 
-El workflow de GitHub comprueba Windows. La existencia del workflow no sustituye sus resultados: revisa Actions y las notas de cada versión. No se acredita compatibilidad con macOS/Linux o un despliegue de producción por haber pasado el demo.
+[Actions](https://github.com/88randy/Salem/actions) muestra el resultado por revisión. Un workflow definido, una prueba omitida o una simulación no acreditan por sí solos una ejecución real de los proveedores.
 
-## Comunidad y licencia
+## Contribuir
 
-Las propuestas y reproducciones pequeñas son bienvenidas en Issues. Consulta [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir un PR. El código propio se distribuye bajo MIT; las dependencias conservan sus [avisos de terceros](THIRD_PARTY_NOTICES.md). Salem es un proyecto independiente y no está afiliado a Anthropic ni OpenAI.
+Salem es código abierto. Si encuentras un problema, comparte los pasos para reproducirlo y el comportamiento esperado en [Issues](https://github.com/88randy/Salem/issues). Las propuestas de experiencia, adaptadores, pruebas y documentación también son bienvenidas.
+
+Lee [CONTRIBUTING.md](CONTRIBUTING.md) para preparar una contribución revisable y [SECURITY.md](SECURITY.md) para reportar vulnerabilidades. Evita incluir credenciales, datos privados o logs sin revisar.
+
+Distribuido bajo [MIT](LICENSE). Las dependencias conservan sus [avisos de terceros](THIRD_PARTY_NOTICES.md). Salem es independiente y no está afiliado a Anthropic ni OpenAI.
