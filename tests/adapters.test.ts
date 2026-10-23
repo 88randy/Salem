@@ -19,6 +19,12 @@ async function input(provider: "codex" | "claude", mode = "ok"): Promise<StageIn
       budgets: { stageTimeoutMs: 10000, maxOutputBytes: 20000 } }
   };
 }
+test('review prompts include historical accepted receipts separately from model statements',async()=>{
+ const i=await input('codex');const receipt={executionId:'previous-execution',runId:'previous-run',acceptance:{accepted:true,fingerprint:'accepted-fingerprint'},review:{sessionId:'independent-review'},implementation:{sessionId:'builder'},integrity:{instructionsHash:'protected-instructions'}};
+ (i as any).predecessorEvidence=[receipt];assert.equal((await runStage(i)).status,'succeeded');
+ const prompt=await readFile(join(i.artifactDir,'prompt.txt'),'utf8'),line=prompt.match(/^ACCEPTED_PREDECESSOR_EVIDENCE_JSON=(.+)$/m);
+ assert.ok(line,'the actual review request must carry the historical receipts');assert.deepEqual(JSON.parse(line[1]!),[receipt]);
+});
 for (const provider of ["codex", "claude"] as const) {
   test(`${provider}: real subprocess normalizes structured output, usage and evidence`, async () => {
     const i = await input(provider); const r = await runStage(i);

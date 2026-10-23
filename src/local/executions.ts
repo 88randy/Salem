@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, realpath, lstat, open, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isInside } from "../config.js";
-import type { ProjectConfig, RunState } from "../contracts.js";
+import type { ProjectConfig, RunState, AcceptedPredecessorEvidence } from "../contracts.js";
 import { runTask, resumeRun, runFingerprint, verifyAcceptedBase, type RunnerOptions } from "../runner.js";
 import {copyAcceptedTree} from './continuation.js';
 import { summarizeRun } from "../metrics.js";
-import { StateStore } from "../state-store.js";
+import { StateStore,digest } from "../state-store.js";
 import { runProcess, redact } from "../process.js";
 import type { ExecutionDetail, ExecutionRecord, Provider } from "./contracts.js";
 import type { LocalStore } from "./store.js";
@@ -36,6 +36,29 @@ export class ExecutionManager {
   await this.ownedWorkspace(e.workspace,e.id);const gitDir=await this.ownedPath('workspaces',e.id,'.git');if(!(await lstat(gitDir)).isDirectory())throw localError('La identidad Git de la base salió de la copia aislada.');
   const run=await this.readRun(e);if(!run||run.expected.gitDir!==gitDir)throw localError('No hay checkpoint aceptado con identidad Git válida.');
   const base={state:run,config:this.config(e),evidenceRoot:join(e.stateDir,run.id,'checks')};await verifyAcceptedBase(base,e.workspace);return base;
+ }
+ async predecessorEvidence(id:string):Promise<AcceptedPredecessorEvidence[]>{
+  const state=await this.store.readState(),current=state.executions.find(e=>e.id===uuid(id));if(!current)throw localError('Ejecución no encontrada.',404);
+  if(!current.continuationId)return [];
+  const c=state.conversations?.find(c=>c.id===current.conversationId);if(!c)throw localError('Falta la conversación del historial.',409);
+  const policy=(config:ProjectConfig)=>digest({capabilities:config.capabilities,checks:config.checks,contextFiles:config.contextFiles,instructions:config.instructions??null});
+  const receipts:AcceptedPredecessorEvidence[]=[],seen=new Set<string>();let previousId:string|undefined=current.continuationId;
+  while(previousId){
+   if(seen.has(previousId))throw localError('El historial de continuidad contiene un ciclo.',409);seen.add(previousId);
+   const e=state.executions.find(e=>e.id===previousId);
+   if(!e||e.status!=='completed'||e.projectId!==current.projectId||e.conversationId!==c.id||e.project.revision!==c.project.revision||policy(e.project.config)!==policy(c.project.config)||!c.steps.some(s=>s.executionId===e.id&&s.status==='accepted'))throw localError('El historial no pertenece a los pasos aceptados de esta conversación y perfil.',409);
+   // acceptedBase verifies the owned tree, checksum-bound checkpoint, actual
+   // check proofs, independent review and local delivery before emitting data.
+   const base=await this.acceptedBase(e.id),run=base.state,fingerprint=runFingerprint(run);
+   const build=[...run.attempts].reverse().find(a=>a.stage==='build'&&a.valid)?.result,review=[...run.attempts].reverse().find(a=>a.stage==='review'&&a.valid)?.result;
+   if(!build?.sessionId||!review?.sessionId||build.sessionId===review.sessionId||review.payload?.verdict!=='success'||!run.acceptance?.accepted||run.acceptance.fingerprint!==fingerprint)throw localError('El historial carece de una revisión independiente verificable.',409);
+   receipts.unshift({executionId:e.id,previousExecutionId:e.continuationId??null,runId:run.id,taskId:run.task.id,profileRevision:e.project.revision,verifiedAt:Date.now(),fingerprint,repoSha:run.expected.head,treeHash:run.expected.treeHash,acceptance:structuredClone(run.acceptance),implementation:{provider:build.provider,sessionId:build.sessionId},review:{provider:review.provider,sessionId:review.sessionId,verdict:'success'},
+    checks:base.config.checks.flatMap(check=>{const proof=[...(run.checks??[])].reverse().find(v=>v.checkId===check.id&&v.fingerprint===fingerprint);return proof?[{id:proof.id,checkId:proof.checkId,status:proof.status,required:check.required,relevantToAcceptance:run.acceptance!.checkIds.includes(proof.id),proofHash:proof.proofHash}]:[];}),
+    integrity:{configHash:run.configHash,instructionsHash:run.instructionsHash,runtimeToolsHash:run.toolsHash,checkToolHashes:structuredClone(run.checkToolHashes??{}),projectPolicyHash:policy(e.project.config)}});
+   if(Buffer.byteLength(JSON.stringify(receipts))>Math.min(100000,current.project.config.budgets.maxOutputBytes))throw localError('La evidencia histórica excede el presupuesto de contexto. Se conservan los resultados; inicia una conversación con el objetivo consolidado.',413);
+   previousId=e.continuationId;
+  }
+  return receipts;
  }
  async startManaged(conversationId:string,taskId:string,key:string,previousId?:string):Promise<ExecutionRecord>{return this.serialized(async()=>{
   const state=await this.store.readState(),c=state.conversations?.find(c=>c.id===uuid(conversationId)),task=state.tasks.find(t=>t.id===uuid(taskId));
@@ -170,6 +193,7 @@ export class ExecutionManager {
    const localOnly=Boolean(e.conversationId)||(!e.project.config.delivery&&!["commit","pull_request","merge","deploy"].some(capability=>e.project.config.capabilities[capability as keyof ProjectConfig["capabilities"]]));
    const options:RunnerOptions={stateDir:e.stateDir,signal:controller.signal,onCheckpoint:async(run:RunState)=>{await this.store.patchExecution(e.id,{runId:run.id,status:"running",reason:run.reason});},...(localOnly?{gates:{deliver:async(run:RunState)=>({id:randomUUID(),fingerprint:runFingerprint(run),verdict:run.acceptance?.accepted===true?"success" as const:"blocked" as const,evidenceRefs:(run.checks??[]).map(check=>check.artifactDir),summary:run.acceptance?.accepted===true?"Entrega local validada: código y diff conservados en la copia aislada, sin commit ni publicación.":"La entrega local requiere checks reales y revisión aceptada."})}}:{})};
    if(!e.runId&&e.continuationId)options.acceptedBase=await this.acceptedBase(e.continuationId);
+   if(e.continuationId)options.predecessorEvidence=await this.predecessorEvidence(e.id);
    const result=e.runId?await resumeRun(e.runId,this.config(e),options):await runTask(e.task,this.config(e),options);
    await this.store.patchExecution(e.id,{runId:result.id,status:result.status==="completed"?"completed":result.status==="cancelled"?"cancelled":result.status==="failed"?"failed":"blocked",reason:result.reason,finishedAt:Date.now()});
   }catch(error){await this.store.patchExecution(e.id,{status:controller.signal.aborted?"cancelled":"failed",reason:controller.signal.aborted?"Ejecución cancelada; se conservaron los resultados confirmados.":`Preparación o ejecución fallida: ${redact((error as Error).message)}`,finishedAt:Date.now()});}

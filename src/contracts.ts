@@ -50,6 +50,16 @@ export interface StageInput {
   disableHooks?: boolean;
   priorStages?: Pick<StageResult, "stage" | "payload" | "artifactDir">[];
   verification?: VerificationContext;
+  predecessorEvidence?: AcceptedPredecessorEvidence[];
+}
+export interface AcceptedPredecessorEvidence {
+  executionId:string; previousExecutionId:string|null; runId:string; taskId:string; profileRevision:number; verifiedAt:number;
+  fingerprint:string; repoSha:string; treeHash:string;
+  acceptance:AcceptanceResult;
+  implementation:{provider:string;sessionId:string};
+  review:{provider:string;sessionId:string;verdict:'success'};
+  checks:{id:string;checkId:string;status:CheckEvidence['status'];required:boolean;relevantToAcceptance:boolean;proofHash:string}[];
+  integrity:{configHash:string;instructionsHash:string;runtimeToolsHash:string;checkToolHashes:Record<string,string>;projectPolicyHash:string};
 }
 export type RunStatus = "queued" | "defining" | "implementing" | "validating" | "reviewing" | "delivering" | "completed" | "failed" | "blocked" | "cancelled";
 export type RunPhase = "defining" | "implementing" | "validating" | "reviewing" | "delivering";

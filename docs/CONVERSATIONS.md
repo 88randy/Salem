@@ -32,6 +32,8 @@ La versión 0.5 usa el formato de catálogo 2. Lee los datos anteriores y, antes
 
 Los mensajes de Salem citan su investigación o ejecución de origen. El chat presenta avances del controlador y resultados reales; no reconstruye una transcripción inventada de Claude o Codex ni muestra salida del proceso como si fuera una conversación humana.
 
+Los agentes reciben también recibos compactos de los pasos anteriores de su cadena. Antes de enviarlos, Salem comprueba la propiedad de las copias, los checkpoints, las pruebas de checks y las sesiones independientes de implementación y revisión. Así, el revisor final puede comprobar condiciones históricas sin acceder a carpetas ajenas a su tarea. Esos recibos no sustituyen la aceptación actual, no amplían permisos y conservan el hash del runtime que produjo cada resultado. Si exceden el presupuesto de contexto, el flujo se detiene y conserva la evidencia.
+
 La entrega conversacional es local. El resultado permanece en la última copia aceptada, accesible desde el detalle. Publicar, integrar o desplegar requiere un flujo explícito de entrega con sus capacidades delegadas; iniciar el chat no publica automáticamente.
 
 ## Límites actuales

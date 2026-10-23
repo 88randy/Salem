@@ -17,6 +17,7 @@ import { usageBudgetReason } from "./metrics.js";
 import type { AgentProvenance, BenchmarkContext } from "./metrics-contracts.js";
 export interface RunnerOptions {
   acceptedBase?: { state:RunState; config:ProjectConfig; evidenceRoot:string };
+  predecessorEvidence?:import('./contracts.js').AcceptedPredecessorEvidence[];
   stateDir?: string; signal?: AbortSignal;
   benchmark?: BenchmarkContext; resumeActor?: "operator" | "automation";
   onCheckpoint?: (state: RunState) => Promise<void>;
@@ -217,7 +218,7 @@ async function drive(store: StateStore, state: RunState, config: ProjectConfig, 
       state.attempts.push(attempt); await save(store, state, options); // intent before launch
       const result = await runStage({ config: { ...config, budgets: { ...config.budgets, stageTimeoutMs: Math.max(1, Math.min(config.budgets.stageTimeoutMs, state.deadlineAt - Date.now())) } },
         agentId: attempt.agentId, stage, task: state.task, artifactDir: attempt.artifactDir,
-        leaseDir: join(store.directory(state.id), "leases"), priorStages: state.attempts.flatMap(a => a.result ? [a.result] : []), ...(verification ? { verification } : {}) }, controller.signal);
+        leaseDir: join(store.directory(state.id), "leases"), priorStages: state.attempts.flatMap(a => a.result ? [a.result] : []), ...(options.predecessorEvidence?{predecessorEvidence:options.predecessorEvidence}:{}), ...(verification ? { verification } : {}) }, controller.signal);
       attempt.result = result; attempt.finishedAt = Date.now(); attempt.after = await repositorySnapshot(config.repoRoot);
       if (attempt.after.head !== before.head || (stage !== "build" && digest(attempt.after) !== digest(before))) {
         await save(store, state, options); return invalidate(store, state, "Agent modified read-only stage or Git HEAD", options);
