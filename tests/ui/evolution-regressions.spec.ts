@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+test.beforeEach(async({page})=>{await page.addInitScript(()=>localStorage.setItem('salem.ui.advanced','true'));});
 const project={id:'p',name:'Demo',archived:false,config:{agents:{codex:{provider:'codex'}},supervisor:{roles:{define:'codex'}}}},task={id:'t',projectId:'p',archived:false,spec:{id:'TASK',objective:'Repair',acceptance:['Original'],scope:['sum.mjs']}};
 const experiment=(id:string)=>({id,taskId:'t',projectId:'p',agentId:'codex',project,task:task.spec,status:'blocked',reason:id,createdAt:1,baseline:[],candidateChecks:[],plan:null,patch:null,review:null,planning:{sessionId:id,usage:null},acceptance:null,diff:'',policyHash:id});
 const state=(experiments:any[])=>({schemaVersion:1,revision:1,settings:{refreshIntervalMs:500},projects:[project],tasks:[task],executions:[],evolutions:experiments});

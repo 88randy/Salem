@@ -1,12 +1,13 @@
 import {test,expect,type Page} from '@playwright/test';
+test.beforeEach(async({page})=>{await page.addInitScript(()=>localStorage.setItem('salem.ui.advanced','true'));});
 
 const settings={revision:1,commands:{claude:['claude'],codex:['codex']},maxConcurrentRuns:1,refreshIntervalMs:1000,preferredPort:3210};
 const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'demo',repoRoot:'C:/demo',contextFiles:[],agents:{thinker:{provider:'claude',command:['claude'],model:'claude-opus-5-5',effort:'medium'},builder:{provider:'codex',command:['codex']}},supervisor:{roles:{define:'thinker',build:'builder',review:'thinker'}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
 const execution={id:'e',revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,status:'completed',reason:null,project,task:{id:'BUG-SUM',objective:'Corregir la suma',scope:['sum.mjs'],acceptance:['Suma correcta'],references:[]},workspace:'C:/isolated',sourceSha:'a'.repeat(40),runId:'run',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[]};
 
-async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initialGoals=[] as any[],evolutions=[] as any[],detailRun=null as any}={}){
+async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initialGoals=[] as any[],evolutions=[] as any[],detailRun=null as any,detailArtifacts=[] as any[],tasks=[] as any[]}={}){
  const requests:any[]=[];let goals:any[]=initialGoals;
- const state=()=>({schemaVersion:1,revision:1,settings,projects:[project],tasks:[],executions,goals,evolutions});
+ const state=()=>({schemaVersion:1,revision:1,settings,projects:[project],tasks,executions,goals,evolutions});
  await page.route('**/api/**',async r=>{
   const path=new URL(r.request().url()).pathname;
   if(path==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state:state(),accounts:[],dataDir:'C:/Salem'}});
@@ -17,7 +18,7 @@ async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initial
    goals=[{...requests.at(-1),id:'goal',revision:1,project,status:'queued',sourceSha:null,createdAt:1,answers:[],attempts:[],plan:null,createdTaskId:null}];
    return r.fulfill({json:goals[0]});
   }
-  if(path==='/api/executions/e')return r.fulfill({json:{execution:executions.find(e=>e.id==='e')||execution,run:detailRun,metrics:null,diff:'',artifacts:[]}});
+  if(path==='/api/executions/e')return r.fulfill({json:{execution:executions.find(e=>e.id==='e')||execution,run:detailRun,metrics:null,diff:'',artifacts:detailArtifacts}});
   return r.fulfill({status:404,json:{error:path}});
  });return requests;
 }
@@ -119,4 +120,23 @@ test('accepted work identifies the stage of earlier diagnostic findings without 
  await fixture(page,{executions:[execution],detailRun:run});await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();await page.getByRole('button',{name:'Ver ejecución',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Hallazgos por etapa',exact:true})).toBeVisible();await expect(page.getByText('Definición · thinker',{exact:true})).toBeVisible();
  await expect(page.locator('.finding')).toContainText('La suma original resta sus argumentos');await expect(page.getByRole('complementary',{name:'Contexto de la ejecución'})).toContainText('Criterios aceptados');
+});
+
+test('long artifact paths never overlap and remain readable across viewport sizes',async({page})=>{
+ const artifacts=Array.from({length:30},(_,i)=>({path:`run-12345678-1234-1234-1234-123456789000/checks/another-very-long-identifier-${i}/stdout.log`,bytes:1024}));
+ await fixture(page,{executions:[execution],detailArtifacts:artifacts});await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();await page.getByRole('button',{name:'Ver ejecución',exact:true}).click();await page.getByRole('button',{name:'Logs',exact:true}).click();
+ for(const [width,height] of [[1366,900],[820,1000],[390,844]] as const){
+  await page.setViewportSize({width,height});const boxes=await page.locator('.artifact-list button').evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect();return {top:b.top,bottom:b.bottom,height:b.height};}));
+  expect(boxes).toHaveLength(30);for(let i=0;i<boxes.length;i++){expect(boxes[i]!.height).toBeGreaterThanOrEqual(58);if(i)expect(boxes[i]!.top).toBeGreaterThanOrEqual(boxes[i-1]!.bottom);}
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+ }
+ await expect(page.locator('.artifact-list button').first()).toHaveAttribute('title',artifacts[0]!.path);
+});
+
+
+
+test('searching a task opens its project task list instead of the home composer',async({page})=>{
+ const task={id:'t',revision:1,projectId:'p',archived:false,spec:{id:'SPEC-SEARCH',objective:'Encontrar esta tarea',scope:['sum.mjs'],acceptance:['Suma correcta'],references:[]}};
+ await fixture(page,{tasks:[task]});await page.goto('/');await page.getByRole('button',{name:'Buscar',exact:true}).click();const search=page.getByRole('dialog',{name:'Buscar en Salem'});await search.getByRole('searchbox').fill('SPEC-SEARCH');await search.getByRole('button',{name:/SPEC-SEARCH/}).click();
+ await expect(page.getByRole('heading',{name:'Tareas',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'SPEC-SEARCH',exact:true})).toBeVisible();
 });

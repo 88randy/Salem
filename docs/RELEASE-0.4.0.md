@@ -13,6 +13,20 @@ Esta versión renueva la experiencia de la beta local para Windows. Conserva la 
 - Icono propio del gato en la pestaña, el instalador y los accesos directos de Windows, con resoluciones de 16 a 256 píxeles. El icono de los accesos apunta a la versión instalada y verificada.
 - Los reintentos de investigación conservan su clave de idempotencia y su borrador. Una respuesta tardía al iniciar una investigación no te saca de la pantalla a la que navegaste.
 
+## Ajustes de usabilidad
+
+- Navegación principal Inicio, Proyectos y Trabajo. Las vistas técnicas siguen disponibles en Herramientas avanzadas; Cuentas y Ajustes conservan acceso directo.
+- Menú lateral de ancho ajustable con arrastre o teclado y preferencia persistente. Controles compactos; proyectos y recientes ocupan el espacio principal.
+- Menús de acciones con clic derecho, tecla Menú/Mayús+F10 y botón de más acciones en proyectos. Reutilizan los controles existentes y sus restricciones; no habilitan operaciones adicionales.
+- Tooltips en botones de iconos. Desplegables con picker nativo estilizado en Chromium compatible, navegación de teclado y fallback del navegador.
+- Panel de actividad con un único scroll; scrolls discretos, logs que conservan su altura y nombres de archivo legibles con la ruta completa disponible.
+- Errores de operación visibles al pie de la pantalla. Tareas inválidas señalan alcance o aceptación junto al campo y junto a Guardar, sin perder el borrador. Un aviso de éxito no oculta un error posterior.
+- Trabajo reúne investigaciones, progreso y resultados con un filtro explícito por proyecto; comienza mostrando todos. Los hallazgos conservan etapa/agente de procedencia.
+
+## Gestión conversacional: siguiente fase
+
+Esta versión conserva el motor actual: una investigación produce un plan y materializa una tarea para el supervisor. La conversación continua por objetivo, descomposición en varias tareas con dependencias y coordinación de su ciclo completo siguen pendientes. La nueva navegación facilita el recorrido existente y no simula esas capacidades futuras.
+
 ## Compatibilidad y validación
 
 No hay migración del catálogo ni modificación de reglas de aceptación, permisos, CLIs, asignaciones de modelos o límites de los perfiles existentes. Una ejecución terminada no se presenta como aceptada si falta su recibo de aceptación.

@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+test.beforeEach(async({page})=>{await page.addInitScript(()=>localStorage.setItem('salem.ui.advanced','true'));});
 test('automatic application is explicit, shows post-application checks and reverts using the current revision',async({page})=>{
  const project={id:'p',name:'Demo',archived:false,config:{agents:{codex:{provider:'codex'}},supervisor:{roles:{define:'codex'}}}},task={id:'t',projectId:'p',archived:false,spec:{id:'BUG',acceptance:['Suma correcta']}};
  let submitted:any,rollback:any;let experiments:any[]=[];

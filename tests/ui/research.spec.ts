@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+test.beforeEach(async({page})=>{await page.addInitScript(()=>localStorage.setItem('salem.ui.advanced','true'));});
 import { readFile } from 'node:fs/promises';
 
 test('duplicating exporting and importing a planned task preserve its investigated origin', async ({page}) => {
