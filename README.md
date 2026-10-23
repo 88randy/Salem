@@ -56,23 +56,16 @@ Escribe, por ejemplo:
 Salem investiga primero. Si falta la política de envío, te pregunta; con tu respuesta prepara el plan y trabaja paso a paso. Puedes precisar el objetivo, adjuntar referencias de texto, detener el trabajo o revisar sus resultados desde el mismo chat.
 
 ```mermaid
-flowchart TD
-    A[Describes el objetivo] --> B[Salem investiga el proyecto]
-    B --> C{¿Falta una decisión de producto?}
-    C -->|Sí| D[Te pregunta en el chat]
-    D --> B
-    C -->|No| E[Prepara tareas y dependencias]
-    E --> F[La IA implementa un paso en una copia aislada]
-    F --> G{¿Pasan los checks del paso?}
-    G -->|Sí| H[Otra sesión revisa el resultado]
-    H --> I{¿Cumple la aceptación?}
-    G -->|No| J{¿Queda margen dentro de los límites?}
-    I -->|No| J
-    J -->|Sí| F
-    J -->|No| K[Se detiene y explica qué necesita]
-    I -->|Sí| L{¿Quedan tareas?}
-    L -->|Sí| F
-    L -->|No| M[Resultado conjunto comprobado y evidencia local]
+flowchart LR
+    A[Tu objetivo] --> B[Investigar y aclarar]
+    B -->|Pregunta de producto| A
+    B --> C[Plan de tareas]
+    C --> D[Implementar un paso]
+    D --> E{Checks y revisión independiente}
+    E -->|Corregir dentro de límites| D
+    E -->|Siguiente tarea| D
+    E -->|Objetivo completo| F[Resultado y evidencia]
+    E -->|Límite o bloqueo| G[Pausa recuperable]
 ```
 
 **Salem orquesta; los modelos investigan, implementan y revisan.** El plan puede asignar cada implementación a un agente permitido por el perfil. Los proveedores, modelos, esfuerzos, roles y límites se configuran por proyecto. Una revisión debe realizarse en una sesión independiente de la implementación, aunque utilices un solo proveedor.
