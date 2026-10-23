@@ -16,10 +16,22 @@ import { deliver, deliveryToolsHash } from "./delivery.js";
 import { usageBudgetReason } from "./metrics.js";
 import type { AgentProvenance, BenchmarkContext } from "./metrics-contracts.js";
 export interface RunnerOptions {
+  acceptedBase?: { state:RunState; config:ProjectConfig; evidenceRoot:string };
+  predecessorEvidence?:import('./contracts.js').AcceptedPredecessorEvidence[];
   stateDir?: string; signal?: AbortSignal;
   benchmark?: BenchmarkContext; resumeActor?: "operator" | "automation";
   onCheckpoint?: (state: RunState) => Promise<void>;
   gates?: { validate?: (state: RunState, signal: AbortSignal) => Promise<GateReceipt>; deliver?: (state: RunState, signal: AbortSignal) => Promise<GateReceipt> };
+}
+/** A dirty baseline is admitted only as the exact, independently accepted predecessor. */
+export async function verifyAcceptedBase(base:NonNullable<RunnerOptions['acceptedBase']>,root:string):Promise<void>{
+ const state=base.state,current=await repositorySnapshot(state.expected.root),target=await repositorySnapshot(root);
+ if(state.status!=='completed'||digest(current)!==digest(state.expected)||current.head!==target.head||current.treeHash!==target.treeHash||current.dirty!==target.dirty||state.configHash!==digest(base.config)||state.instructionsHash!==await instructionsHash(base.config)||state.delivery?.verdict!=='success'||state.delivery.fingerprint!==runFingerprint(state))throw new Error('La base aceptada cambió o no tiene una entrega verificable.');
+ const review=[...state.attempts].reverse().find(a=>a.stage==='review'&&a.valid)?.result;
+ const implementationSessionId=[...state.attempts].reverse().find(a=>a.stage==='build'&&a.valid)?.result?.sessionId??null;
+ if(!review||!state.acceptance?.accepted||state.acceptance.fingerprint!==runFingerprint(state))throw new Error('La base requiere aceptación y revisión independientes.');
+ const accepted=await evaluateAcceptance(state.task,state.checks??[],review,{config:base.config,snapshot:current,fingerprint:runFingerprint(state),evidenceRoot:base.evidenceRoot,implementationSessionId,toolHashes:state.checkToolHashes??{}});
+ if(!accepted.accepted)throw new Error('Pruebas de la base inválidas: '+accepted.reasons.join('; '));
 }
 export function runFingerprint(state: RunState): string {
   return digest({ task: state.task, config: state.configHash, instructions: state.instructionsHash, tools: state.toolsHash, repository: state.expected });
@@ -206,7 +218,7 @@ async function drive(store: StateStore, state: RunState, config: ProjectConfig, 
       state.attempts.push(attempt); await save(store, state, options); // intent before launch
       const result = await runStage({ config: { ...config, budgets: { ...config.budgets, stageTimeoutMs: Math.max(1, Math.min(config.budgets.stageTimeoutMs, state.deadlineAt - Date.now())) } },
         agentId: attempt.agentId, stage, task: state.task, artifactDir: attempt.artifactDir,
-        leaseDir: join(store.directory(state.id), "leases"), priorStages: state.attempts.flatMap(a => a.result ? [a.result] : []), ...(verification ? { verification } : {}) }, controller.signal);
+        leaseDir: join(store.directory(state.id), "leases"), priorStages: state.attempts.flatMap(a => a.result ? [a.result] : []), ...(options.predecessorEvidence?{predecessorEvidence:options.predecessorEvidence}:{}), ...(verification ? { verification } : {}) }, controller.signal);
       attempt.result = result; attempt.finishedAt = Date.now(); attempt.after = await repositorySnapshot(config.repoRoot);
       if (attempt.after.head !== before.head || (stage !== "build" && digest(attempt.after) !== digest(before))) {
         await save(store, state, options); return invalidate(store, state, "Agent modified read-only stage or Git HEAD", options);
@@ -242,7 +254,8 @@ export async function runTask(task: TaskSpec, config: ProjectConfig, options: Ru
   try {
     await noLiveLeases(store);
     const expected = await repositorySnapshot(config.repoRoot);
-    if (expected.dirty) throw new Error("Run requires a clean Git worktree; preserve user changes and use an isolated checkout");
+    if(options.acceptedBase)await verifyAcceptedBase(options.acceptedBase,config.repoRoot);
+    else if (expected.dirty) throw new Error("Run requires a clean Git worktree; preserve user changes and use an isolated checkout");
     const now = Date.now();
     const state: RunState = { schemaVersion: 1, id, revision: 0, projectId: config.projectId, task: structuredClone(task), status: "queued", nextPhase: "defining", reason: null,
       createdAt: now, updatedAt: now, deadlineAt: now + config.supervisor!.runTimeoutMs, configHash: digest(config), instructionsHash: await instructionsHash(config), toolsHash: "unverified",

@@ -6,17 +6,17 @@ const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,up
 const execution={id:'e',revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,status:'completed',reason:null,project,task:{id:'BUG-SUM',objective:'Corregir la suma',scope:['sum.mjs'],acceptance:['Suma correcta'],references:[]},workspace:'C:/isolated',sourceSha:'a'.repeat(40),runId:'run',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[]};
 
 async function fixture(page:Page,{loseFirst=false,executions=[] as any[],initialGoals=[] as any[],evolutions=[] as any[],detailRun=null as any,detailArtifacts=[] as any[],tasks=[] as any[]}={}){
- const requests:any[]=[];let goals:any[]=initialGoals;
- const state=()=>({schemaVersion:1,revision:1,settings,projects:[project],tasks,executions,goals,evolutions});
+ const requests:any[]=[];let goals:any[]=initialGoals;let conversations:any[]=[];
+ const state=()=>({schemaVersion:1,revision:1,settings,projects:[project],tasks,executions,goals,evolutions,conversations});
  await page.route('**/api/**',async r=>{
   const path=new URL(r.request().url()).pathname;
   if(path==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state:state(),accounts:[],dataDir:'C:/Salem'}});
   if(path==='/api/state')return r.fulfill({json:{state:state(),accounts:[],dataDir:'C:/Salem'}});
-  if(path==='/api/goals'){
+  if(path==='/api/conversations'){
    expect(r.request().headers()['x-salem-csrf']).toBe('csrf');requests.push(r.request().postDataJSON());
    if(loseFirst&&requests.length===1)return r.abort('connectionfailed');
-   goals=[{...requests.at(-1),id:'goal',revision:1,project,status:'queued',sourceSha:null,createdAt:1,answers:[],attempts:[],plan:null,createdTaskId:null}];
-   return r.fulfill({json:goals[0]});
+   conversations=[{...requests.at(-1),id:'chat',revision:1,objective:requests.at(-1).text,project,status:'planning',createdAt:1,updatedAt:1,messages:[{id:'u',key:'u',at:1,role:'user',text:requests.at(-1).text}],steps:[],goalId:null,planRevision:0,lastAcceptedExecutionId:null,commands:[],handledCommands:[]}];
+   return r.fulfill({json:conversations[0]});
   }
   if(path==='/api/executions/e')return r.fulfill({json:{execution:executions.find(e=>e.id==='e')||execution,run:detailRun,metrics:null,diff:'',artifacts:detailArtifacts}});
   return r.fulfill({status:404,json:{error:path}});
@@ -28,8 +28,8 @@ test('home investigates a natural objective with the project role and opens its 
  await page.getByLabel('Qué quieres lograr',{exact:true}).fill('Encuentra la causa del error de la suma');
  await page.getByRole('button',{name:'Investigar objetivo',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Encuentra la causa del error de la suma',exact:true})).toBeVisible();
- expect(requests).toHaveLength(1);expect(requests[0]).toMatchObject({projectId:'p',agentId:'thinker',objective:'Encuentra la causa del error de la suma'});
- await expect(page.getByRole('button',{name:'Cancelar investigación',exact:true})).toBeVisible();
+ expect(requests).toHaveLength(1);expect(requests[0]).toMatchObject({projectId:'p',agentId:'thinker',text:'Encuentra la causa del error de la suma'});
+ await expect(page.getByRole('button',{name:'Detener trabajo',exact:true})).toBeVisible();
 });
 
 test('home keeps its draft and request key if starting research loses the response',async({page})=>{
@@ -43,10 +43,10 @@ test('home keeps its draft and request key if starting research loses the respon
 test('leaving home during research startup does not pull the user back when its response arrives',async({page})=>{
  await fixture(page);let release!:()=>void,entered!:()=>void;
  const gate=new Promise<void>(r=>release=r),received=new Promise<void>(r=>entered=r);
- await page.route('**/api/goals',async r=>{entered();await gate;return r.fulfill({json:{id:'goal',projectId:'p',agentId:'thinker',objective:'Revisar suma',project,status:'queued',createdAt:1,answers:[],attempts:[]}});});
+ await page.route('**/api/conversations',async r=>{entered();await gate;return r.fulfill({json:{id:'chat',projectId:'p',agentId:'thinker',objective:'Revisar suma',project,status:'planning',createdAt:1,messages:[],steps:[]}});});
  await page.goto('/');await page.getByLabel('Qué quieres lograr',{exact:true}).fill('Revisar suma');await page.getByRole('button',{name:'Investigar objetivo',exact:true}).click();await received;
  page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Proyectos',exact:true}).click();await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
- const response=page.waitForResponse(r=>r.url().endsWith('/api/goals'));release();await (await response).finished();await page.waitForTimeout(500);
+ const response=page.waitForResponse(r=>r.url().endsWith('/api/conversations'));release();await (await response).finished();await page.waitForTimeout(500);
  await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
 });
 

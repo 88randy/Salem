@@ -19,12 +19,14 @@ export interface ProjectRecord {
   preparation: string[][];
 }
 export interface TaskRecord {
+  conversation?:{id:string;planRevision:number;stepId:string};
   id: string; revision: number; projectId: string; archived: boolean;
   createdAt: number; updatedAt: number; spec: TaskSpec;
   origin?: { goalId: string; sourceSha: string; projectRevision: number };
 }
 export type ExecutionStatus = "queued" | "preparing" | "running" | "interrupted" | "completed" | "failed" | "blocked" | "cancelled";
 export interface ExecutionRecord {
+  conversationId?:string; continuationId?:string;
   id: string; revision: number; taskId: string; projectId: string;
   requestKey: string; createdAt: number; updatedAt: number; finishedAt: number | null;
   status: ExecutionStatus; reason: string | null;
@@ -34,11 +36,12 @@ export interface ExecutionRecord {
   baseExecutionId?: string;
 }
 export interface LocalState {
-  schemaVersion: 1; revision: number;
+  schemaVersion: 1 | 2; revision: number;
   settings: LocalSettings; projects: ProjectRecord[]; tasks: TaskRecord[];
   executions: ExecutionRecord[];
   goals?: import("./research-contracts.js").GoalRecord[];
   evolutions?: import("./evolution-contracts.js").EvolutionRecord[];
+  conversations?: import('./conversation-contracts.js').ConversationRecord[];
 }
 export interface ProjectInput {
   id?: string; revision?: number; name: string; archived?: boolean;

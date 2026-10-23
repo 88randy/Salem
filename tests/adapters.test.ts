@@ -19,6 +19,29 @@ async function input(provider: "codex" | "claude", mode = "ok"): Promise<StageIn
       budgets: { stageTimeoutMs: 10000, maxOutputBytes: 20000 } }
   };
 }
+test('review prompts include historical accepted receipts separately from model statements',async()=>{
+ const i=await input('codex');const receipt={executionId:'previous-execution',runId:'previous-run',acceptance:{accepted:true,fingerprint:'accepted-fingerprint'},review:{sessionId:'independent-review'},implementation:{sessionId:'builder'},integrity:{instructionsHash:'protected-instructions'}};
+ (i as any).predecessorEvidence=[receipt];assert.equal((await runStage(i)).status,'succeeded');
+ const prompt=await readFile(join(i.artifactDir,'prompt.txt'),'utf8'),line=prompt.match(/^ACCEPTED_PREDECESSOR_EVIDENCE_JSON=(.+)$/m);
+ assert.ok(line,'the actual review request must carry the historical receipts');assert.deepEqual(JSON.parse(line[1]!),[receipt]);
+});
+
+test('repeated stage narratives are compacted without dropping review findings or the full evidence',async()=>{
+ const i=await input('codex'),artifactDir=join(i.config.repoRoot,'previous-evidence');await mkdir(artifactDir);
+ const payload={schemaVersion:1 as const,stage:'review' as const,taskId:i.task.id,verdict:'needs_changes' as const,
+  summary:'Long investigation. '.repeat(310)+'Full narrative tail retained on disk.',evidenceRefs:['cart.mjs'],
+  findings:[{severity:'important' as const,description:'The free-shipping threshold must be inclusive; this finding must reach the next implementation.'}]};
+ await writeFile(join(artifactDir,'result.json'),JSON.stringify({payload}));
+ i.priorStages=[{stage:'review',artifactDir,payload}];assert.equal((await runStage(i)).status,'succeeded');
+ const prompt=await readFile(join(i.artifactDir,'prompt.txt'),'utf8');
+ const prior=JSON.parse(prompt.match(/^PRIOR_STAGE_RESULTS_JSON=(.+)$/m)![1]!)[0];
+ assert.ok(prior.payload.summary.length<=1500,'repeated narratives must not dominate each subsequent prompt');
+ assert.equal(prior.summaryTruncated,true,'the consumer must know that the narrative is an excerpt');
+ assert.deepEqual(prior.payload.findings,payload.findings,'actionable review feedback must remain complete');
+ assert.deepEqual(prior.payload.evidenceRefs,['cart.mjs']);
+ assert.equal(prior.artifactDir,artifactDir);
+ assert.deepEqual(JSON.parse(await readFile(join(prior.artifactDir,'result.json'),'utf8')).payload,payload,'the original result must remain available in full');
+});
 for (const provider of ["codex", "claude"] as const) {
   test(`${provider}: real subprocess normalizes structured output, usage and evidence`, async () => {
     const i = await input(provider); const r = await runStage(i);

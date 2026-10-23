@@ -167,6 +167,9 @@ test("corrupt state is preserved and unknown errors return no internal contents"
     const response = await fetch(`${s.server.url}/api/state`, { headers: { Cookie: s.cookie } });
     assert.equal(response.status, 500); assert.doesNotMatch(await response.text(), /fixture-secret|SyntaxError|stack/);
     assert.equal(await readFile(join(s.dataDir, "catalog.json"), "utf8"), "fixture-secret-invalid-json");
+    await s.server.close();
+    assert.ok(s.calls.includes('shutdown'),'the native execution owner must still be shut down');
+    assert.equal(await readFile(join(s.dataDir, "catalog.json"), "utf8"), "fixture-secret-invalid-json",'shutdown must preserve corrupt evidence without recreating the catalog');
   } finally { await s.close(); }
 });
 test("project and task HTTP edits retain independent identities and optimistic revisions", async () => {

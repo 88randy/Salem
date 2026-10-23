@@ -15,3 +15,9 @@ needs_changes o blocked. Usa findings=[] si no hay hallazgos; solo usa success
 cuando hayas revisado realmente los requisitos, el diff y la evidencia disponible.
 No inventes evidencia y declara cualquier limitación en summary. El supervisor
 evalúa los checks y la cobertura por separado; tu verdict no sustituye ese gate.
+
+Revisa tú el cambio y sus criterios en esta sesión independiente. Contrasta los
+recibos actuales con el diff, el código y las aserciones de los verificadores.
+No repitas toda la suite solo para duplicar esos recibos ni delegues otra revisión;
+ejecuta comprobaciones dirigidas si detectas una duda concreta y declara sus
+límites. No omitas criterios ni aceptes un hallazgo pendiente por ahorrar tokens.

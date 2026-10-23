@@ -9,7 +9,7 @@ import { ModelFields } from './model-fields';
 const providerNames = { codex: 'Codex', claude: 'Claude' };
 const goalNames: Record<GoalRecord['status'], string> = {
   queued: 'En cola', investigating: 'Investigando', ready: 'Plan listo', needs_input: 'Necesita tu respuesta',
-  blocked: 'Bloqueado', failed: 'Fallido', cancelled: 'Cancelado', interrupted: 'Interrumpido', materialized: 'Tarea creada',
+  blocked: 'Bloqueado', failed: 'Fallido', cancelled: 'Cancelado', interrupted: 'Interrumpido', materialized: 'Tarea creada', answered:'Respuesta lista',
 };
 const stamp = (value: number) => new Date(value).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
 const number = (value: number | null | undefined) => value == null ? 'No reportado' : value.toLocaleString('es-MX');

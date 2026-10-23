@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 
 const roots=new Set(['README.md','LICENSE','THIRD_PARTY_NOTICES.md','CONTRIBUTING.md','SECURITY.md','CHANGELOG.md','.gitignore','.gitattributes','package.json','package-lock.json','tsconfig.json','playwright.config.ts']);
-const guides=new Set(['SALEM.md','WINDOWS.md','MODELS.md','CHECKS.md','DELIVERY.md','SUPERVISOR.md','METRICS.md','PROVENANCE.md','RELEASE-0.3.0.md','RELEASE-0.4.0.md']);
+const guides=new Set(['SALEM.md','WINDOWS.md','MODELS.md','CHECKS.md','DELIVERY.md','SUPERVISOR.md','METRICS.md','PROVENANCE.md','CONVERSATIONS.md','RELEASE-0.3.0.md','RELEASE-0.4.0.md','RELEASE-0.5.0.md']);
 const directories=new Set(['src','ui','tests','fixtures','templates','evals','profiles','scripts','.github']);
 const excluded=new Set(['scripts/codequim-impact.mjs','profiles/codequim.example.json','scripts/demo-acceptance.mjs','scripts/demo-recovery.mjs']);
 function included(path){return !excluded.has(path)&&(roots.has(path)||(path.startsWith('docs/')&&guides.has(path.slice(5)))||directories.has(path.split('/')[0]));}
