@@ -49,7 +49,7 @@ test('provider changes propose compatible defaults and preserve subsequent manua
   await page.getByLabel('builder: proveedor', { exact: true }).selectOption('codex');
   await expect(page.getByLabel('builder: ignorar configuración personal de Codex', { exact: true })).toBeChecked();
   await expect(page.getByLabel('builder: comando: argumento 1', { exact: true })).toHaveValue('codex');
-  await expect(page.getByLabel('builder: modelo (opcional)', { exact: true })).toHaveValue('gpt-6.1-sol');
+  await expect(page.getByLabel('builder: modelo (opcional)', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('builder: esfuerzo (opcional)', { exact: true })).toHaveValue('');
   await page.getByLabel('builder: comando: argumento 1', { exact: true }).fill('C:/tools/codex-personal.cmd');
   await page.getByLabel('builder: modelo (opcional)', { exact: true }).fill('modelo-elegido');

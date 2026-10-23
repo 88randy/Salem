@@ -15,14 +15,16 @@ async function install(page:Page, agents?:Record<string,unknown>) {
  else {await page.locator('header').getByRole('button',{name:'Agregar proyecto',exact:true}).click();await page.getByLabel('Nombre del proyecto',{exact:true}).fill('Nuevo');await page.getByLabel('Identificador de configuración',{exact:true}).fill('nuevo');await page.getByLabel('Carpeta del repositorio',{exact:true}).fill('C:/demo');}
  return ()=>submitted;
 }
-test('new profiles propose Sol for build and Opus medium for definition and review, with editable CLI defaults',async({page})=>{
+test('new profiles use the Codex CLI default and preserve explicit editable suggestions',async({page})=>{
  const saved=await install(page);
- await expect(page.getByLabel('builder: selección de modelo',{exact:true})).toHaveValue('gpt-6.1-sol');
+ await expect(page.getByLabel('builder: selección de modelo',{exact:true})).toHaveValue('');
  await expect(page.getByLabel('reviewer: selección de modelo',{exact:true})).toHaveValue('claude-opus-5-5');
  await expect(page.getByLabel('reviewer: esfuerzo (opcional)',{exact:true})).toHaveValue('medium');
  await expect(page.getByLabel('Etapa define',{exact:true})).toHaveValue('reviewer');
  await expect(page.getByLabel('Etapa build',{exact:true})).toHaveValue('builder');
  await expect(page.getByLabel('Etapa review',{exact:true})).toHaveValue('reviewer');
+ await page.getByLabel('builder: selección de modelo',{exact:true}).selectOption('gpt-6.1-sol');
+ await expect(page.getByLabel('builder: modelo (opcional)',{exact:true})).toHaveValue('gpt-6.1-sol');
  await page.getByLabel('builder: esfuerzo (opcional)',{exact:true}).fill('high');
  await page.getByLabel('builder: selección de modelo',{exact:true}).selectOption('');
  await expect(page.getByLabel('builder: esfuerzo (opcional)',{exact:true})).toHaveValue('');
@@ -48,7 +50,7 @@ test('imported custom selections survive editing and switching provider resets i
 });
 test('detected projects expose editable model defaults before saving',async({page})=>{
  let saved:any;
- const config={schemaVersion:1,projectId:'detected',repoRoot:'C:/demo',contextFiles:['AGENTS.md'],agents:{codex:{provider:'codex',command:['codex'],model:'gpt-6.1-sol',ignoreUserConfig:true}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}};
+ const config={schemaVersion:1,projectId:'detected',repoRoot:'C:/demo',contextFiles:['AGENTS.md'],agents:{codex:{provider:'codex',command:['codex'],ignoreUserConfig:true}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}};
  const state={schemaVersion:1,revision:1,settings,projects:[],tasks:[],executions:[]};
  await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname;
  if(path==='/api/bootstrap')return route.fulfill({json:{csrfToken:'s',state,accounts:[],dataDir:'C:/Salem'}});
@@ -57,7 +59,7 @@ test('detected projects expose editable model defaults before saving',async({pag
  if(path==='/api/projects'){saved=route.request().postDataJSON();return route.fulfill({json:{...saved,id:'detected',revision:1,createdAt:1,updatedAt:1,archived:false}});}
  return route.fulfill({status:404,json:{error:path}});});
  await page.goto('/');await page.getByRole('button',{name:'Incorporar proyecto',exact:true}).click();await page.getByLabel('Carpeta del repositorio',{exact:true}).fill('C:/demo');await page.getByRole('button',{name:'Investigar repositorio',exact:true}).click();
- await expect(page.getByLabel('codex: selección de modelo',{exact:true})).toHaveValue('gpt-6.1-sol');
+ await expect(page.getByLabel('codex: selección de modelo',{exact:true})).toHaveValue('');
  await page.getByLabel('codex: selección de modelo',{exact:true}).selectOption('gpt-6-luna');
  await page.getByRole('button',{name:'Agregar proyecto detectado',exact:true}).click();
  await expect.poll(()=>saved?.config.agents.codex.model).toBe('gpt-6-luna');
@@ -66,6 +68,7 @@ test('effort selections offer known levels and keep explicit edits when selectin
  const saved=await install(page);
  const effort=page.getByLabel('builder: selección de esfuerzo',{exact:true});
  await expect(effort).toHaveValue('');
+ await page.getByLabel('builder: selección de modelo',{exact:true}).selectOption('gpt-6.1-sol');
  await effort.selectOption('medium');
  await expect(page.getByLabel('builder: esfuerzo (opcional)',{exact:true})).toHaveValue('medium');
  await page.getByLabel('builder: selección de modelo',{exact:true}).selectOption('gpt-6-luna');

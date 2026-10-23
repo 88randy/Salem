@@ -6,7 +6,7 @@ export interface ModelPreset {
   label: string;
   purpose: string;
 }
-export const MODEL_GUIDANCE_DATE = '2026-10-22';
+export const MODEL_GUIDANCE_DATE = '2026-10-23';
 export const MODEL_GUIDANCE_SOURCES = {
   codex: { label: 'Modelos de Codex', url: 'https://learn.chatgpt.com/docs/models' },
   claude: { label: 'Modelos de Claude Code', url: 'https://code.claude.com/docs/en/model-config' },
@@ -28,7 +28,9 @@ const presets: Record<ModelProvider, readonly ModelPreset[]> = {
 };
 export const modelPresets = (provider: ModelProvider): readonly ModelPreset[] => presets[provider];
 export function recommendedModel(provider: ModelProvider): Pick<AgentConfig, 'model' | 'effort'> {
-  return provider === 'codex' ? { model: 'gpt-6.1-sol' } : { model: 'claude-opus-5-5', effort: 'medium' };
+  // Let the installed CLI resolve its supported default for this account.
+  // Suggested model IDs remain explicit, editable choices, never fallbacks.
+  return provider === 'codex' ? {} : { model: 'claude-opus-5-5', effort: 'medium' };
 }
 /** A provider change is an explicit new selection, never a fallback after an API rejection. */
 export function changeAgentProvider(agent: AgentConfig, provider: ModelProvider, command: string[]): AgentConfig {

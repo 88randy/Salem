@@ -8,6 +8,17 @@ import { LocalStore } from "../src/local/store.js";
 import { createLocalDemo } from "../src/local/demo.js";
 
 export const examplePlan = (): GoalPlan => ({schemaVersion:1,verdict:"ready",summary:"Corregir suma tras revisar el código.",facts:[{description:"sum resta los operandos",files:["sum.mjs"]}],assumptions:[],decisions:["Conservar la API"],questions:[],steps:[{title:"Corregir suma",description:"Cambiar la operación y verificar el comportamiento.",files:["sum.mjs"]}],task:{objective:"Corregir la suma",scope:["sum.mjs"],acceptance:["Suma ambos argumentos"],references:["AGENTS.md","sum.mjs"],checkIds:["sum"]},proposedChecks:[]});
+
+test('research surfaces Codex model refusal without changing the profile or hiding raw evidence',async()=>{
+ const {runPlanning}=await import('../src/local/planning.js'),root=await mkdtemp(join(tmpdir(),'salem model refusal ')),store=new LocalStore(join(root,'data')),{project}=await createLocalDemo(store);
+ project.config.agents.codex={provider:'codex',command:[process.execPath,resolve('tests/fixtures/planning-agent.mjs'),'codex','unsupported-model'],model:'gpt-6.1-sol'};
+ const frozen=JSON.stringify(project),artifactDir=join(root,'evidence');await mkdir(artifactDir);
+ const result=await runPlanning({goalId:'goal',attemptId:'attempt',sourceSha:'a'.repeat(40),project,agentId:'codex',objective:'Suma',answers:[],snapshot:{root:project.config.repoRoot,sourceSha:'a'.repeat(40),files:['AGENTS.md','sum.mjs'],truncated:false},artifactDir,leaseDir:join(root,'leases')},new AbortController().signal);
+ assert.equal(result.status,'failed');assert.equal(result.plan,null);assert.match(result.error??'',/model is not supported/);assert.match(result.error??'',/Predeterminado del CLI/);
+ assert.equal(JSON.stringify(project),frozen,'a refusal must never silently change a chosen model');
+ assert.match(await readFile(join(artifactDir,'stdout.log'),'utf8'),/invalid_request_error/);
+ const command=JSON.parse(await readFile(join(artifactDir,'fixture-command.json'),'utf8'));assert.equal(command[command.indexOf('--model')+1],'gpt-6.1-sol');
+});
 test("planner schema requires evidence and executable acceptance without accepting unknown permissions",async()=>{
  const {parseGoalPlan}=await import("../src/local/planning.js");
  const plan=examplePlan();assert.deepEqual(parseGoalPlan(plan,["sum.mjs","AGENTS.md"],["sum"]),plan);
