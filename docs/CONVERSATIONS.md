@@ -1,0 +1,41 @@
+# Trabajar desde una conversación
+
+En **Inicio**, selecciona un proyecto y describe lo que quieres conseguir. Salem abre una conversación persistente: investiga el repositorio, responde consultas, pide las decisiones de negocio que no puede deducir y prepara las tareas necesarias para un cambio.
+
+Por ejemplo: «Corrige el cálculo del carrito, conserva los verificadores y comprueba el resultado». No necesitas crear tareas ni iniciar sus ejecuciones una a una. Si preguntas «¿Cómo funciona el carrito?», Salem puede responder después de investigar sin iniciar implementación.
+
+## Durante el trabajo
+
+- Responde preguntas y agrega instrucciones desde el mismo chat. Puedes adjuntar archivos de texto como referencia. No adjuntes contraseñas ni tokens.
+- **Plan y resultados** muestra los pasos, sus dependencias, el agente y modelo configurados, y el acceso a las evidencias.
+- **Ver cambios y comprobaciones** abre el detalle de una ejecución con sus checks, revisión, diff y logs. Volver regresa a la conversación.
+- **Detener** pide el cierre de los procesos propios y conserva su evidencia. Cambiar instrucciones también detiene el trabajo en curso antes de investigar otra revisión.
+- **Continuar trabajo** reconcilia el checkpoint nativo. Si no puede verificarse, Salem se detiene y explica el motivo. **Reintentar paso en copia nueva** conserva el intento fallido y parte del último código aceptado.
+
+La conversación se encuentra en **Trabajo**, búsqueda y recientes del menú lateral. El borrador se conserva durante las actualizaciones y, en la misma pestaña, al recargar. Puedes exportar el historial a JSON.
+
+## Qué decide Salem
+
+La investigación distingue hechos del repositorio, supuestos, decisiones técnicas y preguntas de producto. Propone tareas con criterios comprobables, IDs y dependencias. El controlador rechaza ciclos, rutas que escapan del proyecto, checks inexistentes y agentes ajenos al perfil.
+
+Cada tarea puede asignarse a un agente del perfil del proyecto. La definición y revisión conservan sus roles configurados. Una elección de modelo representa la configuración solicitada; si el CLI no informa el modelo efectivo, no se inventa ese dato. Un rechazo de cuenta o cuota detiene el trabajo; no cambia silenciosamente de proveedor o modelo.
+
+Los pasos se ejecutan en orden, en copias Git independientes dentro de los datos de Salem. La siguiente copia recibe exactamente los archivos y el índice del último resultado aceptado. Antes de continuar se comprueban su hash, checks reales, revisión en otra sesión y recibo de entrega. No hace falta crear un commit para encadenar tareas y el repositorio original conserva su estado.
+
+Todos los checks requeridos del perfil se mantienen en cada paso. Los criterios de cada tarea se asocian a checks existentes; la última tarea incluye también la aceptación conjunta del objetivo. Un plan que requiere agregar verificadores se detiene para revisar explícitamente el perfil. La conversación no modifica las reglas de aceptación ni los permisos para poder avanzar.
+
+## Persistencia y entrega
+
+Mensajes, revisiones, tareas, ejecuciones y eventos se conservan en el catálogo local con checksum y escritura atómica. Repetir una solicitud con la misma clave no duplica la operación. El servidor mantiene el bloqueo exclusivo de la instalación. Tras un cierre, el trabajo interrumpido requiere una continuación explícita; los pasos aceptados no vuelven a ejecutarse por abrir la conversación.
+
+Los mensajes de Salem citan su investigación o ejecución de origen. El chat presenta avances del controlador y resultados reales; no reconstruye una transcripción inventada de Claude o Codex ni muestra salida del proceso como si fuera una conversación humana.
+
+La entrega conversacional es local. El resultado permanece en la última copia aceptada, accesible desde el detalle. Publicar, integrar o desplegar requiere un flujo explícito de entrega con sus capacidades delegadas; iniciar el chat no publica automáticamente.
+
+## Límites actuales
+
+El coordinador ejecuta una tarea a la vez por conversación, incluso si algunos nodos del plan son independientes. Las referencias adjuntas son texto UTF-8: hasta ocho archivos, 40.000 caracteres por archivo y 100.000 en total. Las imágenes y archivos binarios no se admiten como referencias del chat.
+
+Una conversación admite hasta 200 comandos y un contexto limitado. Si se alcanza el límite, inicia otra con el contexto consolidado. Cambiar el perfil mientras un plan está congelado detiene el inicio de nuevas tareas; inicia otra conversación con la configuración actual. Las tareas de un plan se ajustan desde el chat, conservando su historial, y no se editan o ejecutan individualmente desde herramientas avanzadas.
+
+La copia de una base aceptada rechaza enlaces o entradas incompatibles, en vez de seguirlos fuera del workspace. Los procesos y comprobaciones siguen los límites de [seguridad](../SECURITY.md) y [recuperación](SUPERVISOR.md) del framework. No se ofrece una sandbox del sistema operativo ni ejecución remota mediante este flujo.

@@ -3,7 +3,8 @@ import { mkdir, readdir, realpath, lstat, open, writeFile } from "node:fs/promis
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isInside } from "../config.js";
 import type { ProjectConfig, RunState } from "../contracts.js";
-import { runTask, resumeRun, runFingerprint, type RunnerOptions } from "../runner.js";
+import { runTask, resumeRun, runFingerprint, verifyAcceptedBase, type RunnerOptions } from "../runner.js";
+import {copyAcceptedTree} from './continuation.js';
 import { summarizeRun } from "../metrics.js";
 import { StateStore } from "../state-store.js";
 import { runProcess, redact } from "../process.js";
@@ -28,6 +29,29 @@ export class ExecutionManager {
  }
  private serialized<T>(fn:()=>Promise<T>):Promise<T>{const next=this.reservation.then(fn);this.reservation=next.catch(()=>{});return next;}
  isBusy(provider:Provider):boolean{return [...this.active.values()].some(v=>v.providers.includes(provider));}
+ isActive(id:string):boolean{return this.active.has(id);}
+ async checkpoint(id:string):Promise<RunState|null>{return this.readRun(await this.store.findExecution(id));}
+ async acceptedBase(id:string):Promise<NonNullable<RunnerOptions['acceptedBase']>>{
+  const e=await this.store.findExecution(id);if(e.status!=='completed'||!e.workspace||this.active.has(id))throw localError('La tarea anterior no tiene un resultado confirmado.',409);
+  await this.ownedWorkspace(e.workspace,e.id);const gitDir=await this.ownedPath('workspaces',e.id,'.git');if(!(await lstat(gitDir)).isDirectory())throw localError('La identidad Git de la base salió de la copia aislada.');
+  const run=await this.readRun(e);if(!run||run.expected.gitDir!==gitDir)throw localError('No hay checkpoint aceptado con identidad Git válida.');
+  const base={state:run,config:this.config(e),evidenceRoot:join(e.stateDir,run.id,'checks')};await verifyAcceptedBase(base,e.workspace);return base;
+ }
+ async startManaged(conversationId:string,taskId:string,key:string,previousId?:string):Promise<ExecutionRecord>{return this.serialized(async()=>{
+  const state=await this.store.readState(),c=state.conversations?.find(c=>c.id===uuid(conversationId)),task=state.tasks.find(t=>t.id===uuid(taskId));
+  const same=state.executions.find(e=>e.requestKey===key);if(same){if(same.taskId!==taskId||same.conversationId!==conversationId||same.continuationId!==previousId)throw localError('La clave pertenece a otro trabajo.',409);return same;}
+  if(this.closed||!c||!task?.conversation||task.conversation.id!==c.id||task.projectId!==c.projectId)throw localError('Tarea fuera de la conversación.',409);
+  const project=state.projects.find(p=>p.id===c.projectId&&!p.archived);if(!project||project.revision!==c.project.revision)throw localError('El perfil cambió. Se conservó el plan; revisa el proyecto antes de continuar.',409);
+  const step=c.steps.find(s=>s.taskId===taskId);if(!step)throw localError('La tarea no pertenece al plan vigente.',409);
+  const current=c.steps.filter(s=>s.key.startsWith(c.goalId+':'));
+  if(current.find(s=>s.status!=='accepted')?.taskId!==taskId||previousId!==(c.lastAcceptedExecutionId??undefined)||step.planTask.dependsOn.some(id=>!current.some(s=>s.planTask.id===id&&s.status==='accepted')))throw localError('Primero deben aceptarse los pasos anteriores del plan.',409);
+  if(previousId){const previous=await this.store.findExecution(previousId);if(previous.conversationId!==c.id||previous.projectId!==c.projectId)throw localError('La base pertenece a otra conversación.',409);await this.acceptedBase(previousId);}
+  const frozen=structuredClone(c.project);frozen.config.supervisor!.roles.build=step.planTask.agentId;
+  const goal=c.goalId?await this.store.findGoal(c.goalId):null;if(!goal?.sourceSha)throw localError('Falta la revisión investigada.');frozen.baseRef=goal.sourceSha;
+  const id=randomUUID(),execution:ExecutionRecord={id,revision:1,taskId,projectId:c.projectId,conversationId:c.id,...(previousId?{continuationId:previousId}:{}),requestKey:key,createdAt:Date.now(),updatedAt:Date.now(),finishedAt:null,status:'queued',reason:null,project:frozen,task:structuredClone(task.spec),workspace:null,sourceSha:null,runId:null,stateDir:join(this.store.root,'executions',id,'runs'),setupMs:null,preparationLogs:[]};
+  if(providers(execution).some(p=>this.options.canStart?.(p)===false))throw localError('La cuenta no está disponible para iniciar.',409);
+  await this.store.saveExecution(execution);if(this.options.autoStart!==false)this.wake();return execution;
+ });}
  async start(taskId:string,key:string,baseExecutionId?:string):Promise<ExecutionRecord>{return this.serialized(async()=>{
   if(this.closed)throw localError("Salem se está cerrando.",409);
   uuid(taskId);localText(key,"clave de solicitud",120);
@@ -35,6 +59,7 @@ export class ExecutionManager {
   if(same){if(same.taskId!==taskId||same.baseExecutionId!==baseExecutionId)throw localError("La clave ya pertenece a otra solicitud.",409);return same;}
   const task=state.tasks.find(t=>t.id===taskId&&!t.archived),project=state.projects.find(p=>p.id===task?.projectId&&!p.archived);
   if(!task||!project)throw localError("Selecciona un proyecto y una tarea activos.",404);
+  if(task.conversation)throw localError('Continúa esta tarea desde su conversación para conservar dependencias y pruebas.',409);
   if(task.origin&&(task.origin.projectRevision!==project.revision||baseExecutionId))throw localError("El perfil del proyecto cambió o la base sustituye la revisión investigada. Crea un nuevo objetivo con el contexto actual.",409);
   const id=randomUUID(),execution:ExecutionRecord={id,revision:1,taskId,projectId:project.id,requestKey:key,createdAt:Date.now(),updatedAt:Date.now(),finishedAt:null,
    status:"queued",reason:null,project:structuredClone(project),task:structuredClone(task.spec),workspace:null,sourceSha:null,runId:null,
@@ -51,8 +76,13 @@ export class ExecutionManager {
   if(e.status==="queued")return this.store.patchExecution(id,{status:"cancelled",reason:"Cancelada antes de iniciar.",finishedAt:Date.now()});
   return e;
  });}
- async resume(id:string):Promise<ExecutionRecord>{return this.serialized(async()=>{
+ async resumeManaged(id:string):Promise<ExecutionRecord>{const e=await this.store.findExecution(id),c=e.conversationId?await this.store.findConversation(e.conversationId):null;
+  if(!c||!c.steps.some(s=>s.executionId===id&&s.key.startsWith(c.goalId+':')&&s.status!=='accepted'))throw localError('La ejecución no pertenece al paso vigente de la conversación.',409);
+  return this.resume(id,true);
+ }
+ async resume(id:string,managed=false):Promise<ExecutionRecord>{return this.serialized(async()=>{
   const e=await this.store.findExecution(id);if(this.active.has(id)||e.status==="completed"||e.status==="queued")return e;
+  if(e.conversationId&&!managed)throw localError('Continúa esta ejecución desde su conversación.',409);
   const run=await this.readRun(e,true).catch(()=>null);
   if(!run||!e.workspace)return this.store.patchExecution(id,{status:"blocked",reason:"No hay un checkpoint nativo verificable para reanudar. Conserva la evidencia; puedes repetir como una nueva ejecución aislada.",finishedAt:Date.now()});
   if(providers(e).some(p=>this.options.canStart?.(p)===false))throw localError("Espera a que termine la conexión de la cuenta.",409);
@@ -67,6 +97,7 @@ export class ExecutionManager {
    await this.serialized(async()=>{
     const current=await this.store.readState(),e=current.executions.find(item=>item.id===candidate.id);
     if(this.closed||this.active.size+(this.options.additionalActive?.()??0)>=current.settings.maxConcurrentRuns||!e||e.status!=="queued"||this.active.has(e.id)||providers(e).some(p=>this.options.canStart?.(p)===false))return;
+    if(e.conversationId&&!current.conversations?.some(c=>c.id===e.conversationId&&c.status==='working'&&c.steps.some(s=>s.executionId===e.id&&s.key.startsWith(c.goalId+':')&&s.status==='running')))return;
     const controller=new AbortController();
     // Reserve synchronously with the account predicate; execution starts only
     // after the active reservation is visible to cancellation and account changes.
@@ -95,7 +126,8 @@ export class ExecutionManager {
  private async prepare(e:ExecutionRecord,signal:AbortSignal):Promise<ExecutionRecord>{
   const started=Date.now(),artifactRoot=await this.ownedPath("executions",e.id),leaseDir=join(artifactRoot,"setup-leases");
   await mkdir(artifactRoot,{recursive:true});await mkdir(await this.ownedPath("workspaces"),{recursive:true});
-  const base=await this.baseExecution(e),source=base?.root??await realpath(e.project.config.repoRoot);
+  const continuation=e.continuationId?await this.acceptedBase(e.continuationId):null;
+  const base=continuation?{root:continuation.state.expected.root,sha:continuation.state.expected.head}:await this.baseExecution(e),source=base?.root??await realpath(e.project.config.repoRoot);
   const top=await realpath(await localGit(source,["rev-parse","--show-toplevel"],this.store.root,{signal,leaseDir}));
   if(top!==source)throw localError("El proyecto debe apuntar a la carpeta raíz de un repositorio Git.");
   const sha=await localGit(source,["rev-parse","--verify","--end-of-options",`${base?.sha??e.project.baseRef}^{commit}`],this.store.root,{signal,leaseDir});
@@ -111,6 +143,7 @@ export class ExecutionManager {
    await localGit(workspace,["config","--local",key,key.endsWith(".required")?"false":""],this.store.root,{signal,leaseDir});
   }
   await localGit(workspace,["checkout","--detach",sha],this.store.root,{signal,leaseDir});
+  if(continuation)await copyAcceptedTree(source,workspace);
   const remote=e.project.config.delivery?.github;
   if(remote){const names=(await localGit(workspace,["remote"],this.store.root,{signal,leaseDir})).split(/\r?\n/);
    await localGit(workspace,names.includes(remote.remote)?["remote","set-url",remote.remote,remote.remoteUrl]:["remote","add",remote.remote,remote.remoteUrl],this.store.root,{signal,leaseDir});}
@@ -129,8 +162,9 @@ export class ExecutionManager {
    if(!e.runId){await this.store.patchExecution(e.id,{status:"preparing",reason:null});controller.signal.throwIfAborted();e=await this.prepare(e,controller.signal);}
    else await this.ownedWorkspace(e.workspace!,e.id);
    controller.signal.throwIfAborted();await this.store.patchExecution(e.id,{status:"running",reason:null});
-   const localOnly=!e.project.config.delivery&&!["commit","pull_request","merge","deploy"].some(capability=>e.project.config.capabilities[capability as keyof ProjectConfig["capabilities"]]);
+   const localOnly=Boolean(e.conversationId)||(!e.project.config.delivery&&!["commit","pull_request","merge","deploy"].some(capability=>e.project.config.capabilities[capability as keyof ProjectConfig["capabilities"]]));
    const options:RunnerOptions={stateDir:e.stateDir,signal:controller.signal,onCheckpoint:async(run:RunState)=>{await this.store.patchExecution(e.id,{runId:run.id,status:"running",reason:run.reason});},...(localOnly?{gates:{deliver:async(run:RunState)=>({id:randomUUID(),fingerprint:runFingerprint(run),verdict:run.acceptance?.accepted===true?"success" as const:"blocked" as const,evidenceRefs:(run.checks??[]).map(check=>check.artifactDir),summary:run.acceptance?.accepted===true?"Entrega local validada: código y diff conservados en la copia aislada, sin commit ni publicación.":"La entrega local requiere checks reales y revisión aceptada."})}}:{})};
+   if(!e.runId&&e.continuationId)options.acceptedBase=await this.acceptedBase(e.continuationId);
    const result=e.runId?await resumeRun(e.runId,this.config(e),options):await runTask(e.task,this.config(e),options);
    await this.store.patchExecution(e.id,{runId:result.id,status:result.status==="completed"?"completed":result.status==="cancelled"?"cancelled":result.status==="failed"?"failed":"blocked",reason:result.reason,finishedAt:Date.now()});
   }catch(error){await this.store.patchExecution(e.id,{status:controller.signal.aborted?"cancelled":"failed",reason:controller.signal.aborted?"Ejecución cancelada; se conservaron los resultados confirmados.":`Preparación o ejecución fallida: ${redact((error as Error).message)}`,finishedAt:Date.now()});}

@@ -4,7 +4,7 @@
 
 Un espacio local para trabajar con Claude y Codex sobre tus proyectos de software.
 
-Describe un objetivo, deja que Salem investigue el repositorio y revisa el plan. Después, el supervisor coordina implementación, pruebas y revisión con las cuentas que ya utilizas. Tú eliges los modelos, los límites y las acciones que puede realizar.
+Describe un objetivo en el chat. Salem investiga el repositorio, te hace las preguntas necesarias, crea las tareas y coordina implementación, pruebas y revisión con las cuentas que ya utilizas. Tú eliges los modelos, los límites y las acciones que puede realizar.
 
 **Beta local para Windows.** Consulta las [notas de la interfaz 0.4.0](docs/RELEASE-0.4.0.md) y los resultados de Actions para conocer la validación y sus límites. Código abierto bajo [MIT](LICENSE).
 
@@ -35,6 +35,7 @@ Abre la dirección que imprime la terminal, normalmente `http://127.0.0.1:3210`.
 
 - **Incorporar proyectos:** detecta instrucciones, tecnologías y checks en una revisión Git local, sin ejecutar scripts durante la detección.
 - **Plantear objetivos:** investiga el código, identifica supuestos y preguntas, y prepara un plan con evidencia y criterios de aceptación.
+- **Gestionar desde el chat:** conversa sobre el objetivo, responde aclaraciones y ajusta las instrucciones. Salem coordina tareas dependientes y comprueba el resultado conjunto; el plan y sus evidencias quedan accesibles desde la conversación.
 - **Coordinar Claude y Codex:** asigna agentes a definición, implementación y revisión. El perfil inicial propone Opus5.5 con esfuerzo medio para definir/revisar y GPT-6.1 Sol para implementar; puedes cambiar modelos y roles.
 - **Ejecutar y comprobar:** trabaja en una copia aislada, ejecuta los checks del proyecto y exige revisión en otra sesión antes de aceptar código.
 - **Seguir y recuperar:** conserva estado, etapas, diffs, logs y recibos. Permite cancelar, reanudar desde checkpoints verificables o iniciar otra ejecución conservando la anterior.
@@ -63,6 +64,7 @@ Los agentes y checks se ejecutan con tu usuario del sistema. Una copia Git y los
 ## Documentación
 
 - [Guía completa de Salem](docs/SALEM.md)
+- [Gestión conversacional](docs/CONVERSATIONS.md)
 - [Windows: instalar y operar](docs/WINDOWS.md)
 - [Modelos y colaboración](docs/MODELS.md)
 - [Supervisor y recuperación](docs/SUPERVISOR.md)

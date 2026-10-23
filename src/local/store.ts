@@ -7,6 +7,9 @@ import { atomicJson, digest } from "../state-store.js";
 import { defaultSettings } from "./contracts.js";
 import type { ExecutionRecord, LocalSettings, LocalState, ProjectInput, ProjectRecord, TaskInput, TaskRecord } from "./contracts.js";
 import { localError, record, uuid, validateProjectInput, validateSettings, validateTaskInput } from "./validation.js";
+import type {ConversationRecord,ChatMessage} from './conversation-contracts.js';
+import {orderedWork} from './conversation-plan.js';
+export function appendChat(c:ConversationRecord,message:ChatMessage):void{if(!c.messages.some(m=>m.key===message.key))c.messages.push(message);}
 
 const MAX_CATALOG_BYTES=50_000_000;
 export class LocalStore {
@@ -29,6 +32,7 @@ export class LocalStore {
       const s=envelope.value;
       if(!s||s.schemaVersion!==1||!Number.isSafeInteger(s.revision)||!Array.isArray(s.projects)||!Array.isArray(s.tasks)||!Array.isArray(s.executions)||(s.goals!==undefined&&!Array.isArray(s.goals))||digest(s)!==envelope.checksum)throw new Error("integridad inválida");
       if(s.evolutions!==undefined&&!Array.isArray(s.evolutions))throw new Error('Evolución inválida');
+      if(s.conversations!==undefined&&!Array.isArray(s.conversations))throw new Error('Conversaciones inválidas');
       validateSettings(s.settings);
       return structuredClone(s);
     }catch(e){throw localError(`No se pudo leer el catálogo de Salem; conserva los datos para recuperarlo: ${(e as Error).message}`,500);}
@@ -48,10 +52,40 @@ export class LocalStore {
     if(s.projects.some(p=>p.id!==project.id&&p.config.projectId===project.config.projectId))throw localError("Ya existe un proyecto con ese identificador.",409);
     if(existing)s.projects[s.projects.indexOf(existing)]=project;else s.projects.push(project);return project;
   });}
+  async saveConversation(c:ConversationRecord):Promise<ConversationRecord>{return this.change(s=>{
+    s.conversations??=[];const same=s.conversations.find(v=>v.requestKey===c.requestKey);
+    if(same){if(same.projectId!==c.projectId||same.objective!==c.objective||same.agentId!==c.agentId||digest(same.messages[0]?.references??[])!==digest(c.messages[0]?.references??[]))throw localError('La clave pertenece a otra conversación.',409);return same;}
+    s.conversations.push(structuredClone(c));return c;
+  });}
+  async findConversation(id:string):Promise<ConversationRecord>{const c=(await this.readState()).conversations?.find(c=>c.id===uuid(id));if(!c)throw localError('Conversación no encontrada.',404);return c;}
+  async updateConversation(id:string,fn:(c:ConversationRecord)=>void,revision?:number):Promise<ConversationRecord>{return this.change(s=>{
+    const c=s.conversations?.find(c=>c.id===uuid(id));if(!c)throw localError('Conversación no encontrada.',404);
+    if(revision!==undefined&&c.revision!==revision)throw localError('La conversación cambió. Actualiza antes de enviar; tu borrador se conserva.',409);
+    fn(c);c.revision++;c.updatedAt=Date.now();return c;
+  });}
+  async materializeConversation(id:string,goalId:string,files:string[]):Promise<ConversationRecord>{return this.change(s=>{
+    const c=s.conversations?.find(c=>c.id===uuid(id)),goal=s.goals?.find(g=>g.id===uuid(goalId));
+    if(!c||!goal||c.goalId!==goal.id||c.projectId!==goal.projectId||goal.status!=='ready'||!goal.plan||!goal.sourceSha)throw localError('El plan de la conversación no está listo.',409);
+    if(c.steps.some(step=>step.key.startsWith(goal.id+':')))return c;
+    const project=s.projects.find(p=>p.id===c.projectId&&!p.archived);
+    if(!project||project.revision!==c.project.revision||goal.project.revision!==c.project.revision)throw localError('El perfil cambió; se conserva la conversación y no se ejecuta el plan.',409);
+    const plan=parseGoalPlan(goal.plan,files,project.config.checks.map(check=>check.id),Object.keys(project.config.agents));
+    if(plan.proposedChecks.length||!plan.work)throw localError('El plan requiere checks nuevos o no tiene tareas. Revisa el perfil de forma explícita antes de continuar.',409);
+    const ordered=orderedWork(plan.work);c.planRevision++;
+    for(const [index,node] of ordered.entries()){
+      const last=index===ordered.length-1,criteria=[...new Set([...node.acceptance,...(last?plan.task.acceptance:[])])];
+      const spec={id:`CHAT-${c.id.slice(0,8)}-${c.planRevision}-${node.id}`,objective:`Paso ${index+1} de ${ordered.length}: ${node.title}\n${node.objective}\n\nObjetivo inicial: ${c.objective}\nResultado acordado tras la conversación: ${plan.task.objective}\n\nDecisiones del plan:\n${plan.decisions.join('\n')}\nSupuestos:\n${plan.assumptions.join('\n')}\n${last?'Última tarea: verifica el resultado conjunto del objetivo completo.':'Implementa y revisa los criterios de este paso. Los pasos posteriores comprobarán el resto del objetivo; no declares el objetivo conjunto completado todavía.'}`,scope:[...new Set([...node.scope,...(last?plan.task.scope:[])])],acceptance:criteria,references:plan.task.references,acceptanceChecks:Object.fromEntries(criteria.map(criterion=>[criterion,[...new Set([...node.checkIds,...(last&&plan.task.acceptance.includes(criterion)?plan.task.checkIds:[])])]]))};
+      const task=validateTaskInput({projectId:c.projectId,spec},project);task.conversation={id:c.id,planRevision:c.planRevision,stepId:node.id};s.tasks.push(task);
+      c.steps.push({key:`${goal.id}:${node.id}`,planTask:node,taskId:task.id,executionId:null,status:'pending',attempt:0});
+    }
+    c.status='working';c.reason=null;c.revision++;c.updatedAt=Date.now();
+    appendChat(c,{id:randomUUID(),key:`plan:${goal.id}`,at:Date.now(),role:'salem',text:`${plan.summary}\n\n${ordered.map((t,i)=>`${i+1}. ${t.title}`).join('\n')}\n\n${plan.decisions.join('\n')}${plan.assumptions.length?'\nSupuestos por comprobar:\n'+plan.assumptions.join('\n'):''}\n\nPrepararé y comprobaré cada paso en una copia aislada.`,source:{kind:'goal',id:goal.id,revision:goal.revision}});return c;
+  });}
   async saveTask(input:TaskInput):Promise<TaskRecord>{return this.change(s=>{
     const project=s.projects.find(p=>p.id===uuid(input.projectId));if(!project)throw localError("Proyecto no encontrado.",404);
     const existing=input.id?s.tasks.find(t=>t.id===uuid(input.id)):undefined;
     if(input.id&&!existing)throw localError("Tarea no encontrada.",404);
+    if(existing?.conversation)throw localError('Esta tarea pertenece a un plan congelado. Pide el ajuste desde su conversación.',409);
     if(existing&&existing.projectId!==project.id)throw localError("No se puede mover una tarea con historial a otro proyecto.");
     if(existing&&input.revision!==existing.revision)throw localError("409: la tarea cambió en otra pestaña. Recarga su versión antes de guardar.",409);
     let copyOrigin:TaskRecord["origin"];
@@ -97,12 +131,13 @@ export class LocalStore {
   async findGoal(id:string):Promise<GoalRecord>{const g=(await this.readState()).goals?.find(g=>g.id===uuid(id));if(!g)throw localError("Objetivo no encontrado.",404);return g;}
   async materializeGoal(id:string,revision:number,files:string[]):Promise<{goal:GoalRecord;task:TaskRecord}>{return this.change(async s=>{
     const goal=s.goals?.find(g=>g.id===uuid(id));if(!goal)throw localError("Objetivo no encontrado.",404);
+    if(goal.conversational)throw localError('Las tareas de este objetivo se gestionan desde su conversación.',409);
     if(goal.createdTaskId){const task=s.tasks.find(t=>t.id===goal.createdTaskId);if(!task)throw localError("La tarea del plan no está en el catálogo.",409);return {goal,task};}
     if(goal.revision!==revision)throw localError("409: el objetivo cambió. Actualiza su versión.",409);
     if(goal.status!=="ready"||!goal.plan||!goal.sourceSha)throw localError("El plan no está listo o tiene preguntas pendientes.",409);
     const project=s.projects.find(p=>p.id===goal.projectId&&!p.archived);
     if(!project||project.revision!==goal.project.revision)throw localError("El proyecto cambió o está archivado. Investiga un nuevo objetivo con el perfil actual.",409);
-    const plan=parseGoalPlan(goal.plan,files,project.config.checks.map(c=>c.id));
+    const plan=parseGoalPlan(goal.plan,files,project.config.checks.map(c=>c.id),Object.keys(project.config.agents));
     let updated=project;
     if(plan.proposedChecks.length){
       updated=await validateProjectInput({...project,config:{...project.config,checks:[...project.config.checks,...plan.proposedChecks.map(c=>({id:c.id,command:c.command,required:true,...(c.toolFiles.length?{toolFiles:c.toolFiles}:{})}))]}},project);

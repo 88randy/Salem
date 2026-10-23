@@ -10,12 +10,14 @@ import { AccountManager } from "./accounts.js";
 import { LocalStore } from "./store.js";
 import { browseDirectories } from "./filesystem.js";
 import { GoalManager } from "./goals.js";
+import {ConversationManager} from './conversations.js';
+import type {ExecutionManager} from './executions.js';
 import { EvolutionManager } from './evolution.js';
 import { discoverProject } from "./discovery.js";
 import { localError, localText, record, uuid } from "./validation.js";
 import type { LocalSettings, ProjectInput, Provider, TaskInput } from "./contracts.js";
 
-export interface LocalExecutionManager {
+export interface LocalExecutionManager extends Partial<Pick<ExecutionManager,'acceptedBase'|'startManaged'|'isActive'|'checkpoint'|'resumeManaged'>> {
   initialize(): Promise<void>;
   start(taskId: string, requestKey: string, baseExecutionId?: string): Promise<unknown>;
   cancel(id: string): Promise<unknown>; resume(id: string): Promise<unknown>;
@@ -98,7 +100,7 @@ export async function startLocalServer(options: LocalServerOptions) {
   const dataDir = await realpath(options.dataDir), staticDir = await realpath(options.staticDir);
   const release = await acquireLock(join(dataDir, "server.lock"), randomUUID());
   const store = options.store ?? new LocalStore(dataDir);
-  let manager: LocalExecutionManager | undefined, accounts: AccountManager | undefined, goals: GoalManager | undefined, evolution: EvolutionManager | undefined;
+  let manager: LocalExecutionManager | undefined, accounts: AccountManager | undefined, goals: GoalManager | undefined, evolution: EvolutionManager | undefined,conversations:ConversationManager|undefined;
   let closing = false, initialized=false, closePromise: Promise<void> | undefined;
   const sessions = new Map<string, { csrf: string; expires: number }>();
   let url = "";
@@ -144,6 +146,9 @@ export async function startLocalServer(options: LocalServerOptions) {
       if (!session || session.expires <= Date.now()) { if (id) sessions.delete(id); throw localError("La sesión local expiró. Recarga Salem.", 401); }
       if (method !== "GET" && (origin !== url || !equal(typeof request.headers["x-salem-csrf"] === "string" ? request.headers["x-salem-csrf"] : undefined, session.csrf))) throw localError("La solicitud requiere Origin y token CSRF de Salem.", 403);
       if (method === "GET") {
+        const conversationRoute=path.match(/^\/api\/conversations\/([^/]+)$/);
+        if(conversationRoute){json(response,200,await store.findConversation(uuid(conversationRoute[1])));return;}
+        if(path==='/api/conversations'||/^\/api\/conversations\/[^/]+\/(?:message|pause|continue|retry)$/.test(path))throw localError('Esta acción requiere un método de mutación.',405);
         if (path === "/api/state") { json(response, 200, { state: await store.readState(), accounts: accounts!.list(), dataDir }); return; }
         if(path==='/api/evolution/incidents'){json(response,200,await evolution!.incidents());return;}
         const evolutionRoute=path.match(/^\/api\/evolution\/([^/]+)(?:\/(artifact))?$/);
@@ -178,6 +183,9 @@ export async function startLocalServer(options: LocalServerOptions) {
         json(response, 200, await store.saveSettings(input as unknown as LocalSettings)); return;
       }
       if (method !== "POST") throw localError("Método no permitido.", 405);
+      if(path==='/api/conversations'){json(response,200,await conversations!.start(input));return;}
+      const chatAction=path.match(/^\/api\/conversations\/([^/]+)\/(message|pause|continue|retry)$/);
+      if(chatAction){json(response,200,await conversations!.command(uuid(chatAction[1]),chatAction[2]!,input));return;}
       if(path==='/api/projects/evolution-demo'){record(input,[]);json(response,200,await (await import('./evolution-demo.js')).createEvolutionDemo(store));return;}
       if(path==='/api/evolution'){json(response,200,await evolution!.start(input as unknown as import('./evolution-contracts.js').EvolutionRequest));return;}
       const evolutionCancel=path.match(/^\/api\/evolution\/([^/]+)\/cancel$/);if(evolutionCancel){record(input,[]);json(response,200,await evolution!.cancel(uuid(evolutionCancel[1])));return;}
@@ -242,12 +250,19 @@ export async function startLocalServer(options: LocalServerOptions) {
   try {
     await store.readState();
     manager = options.manager ?? new (await import("./executions.js")).ExecutionManager(store, { canStart: (provider: Provider) => initialized&&!accounts?.isMutating(provider)&&!goals?.hasUnconfirmed(provider)&&!evolution?.hasUnconfirmed(provider),additionalActive:()=>(goals?.activeCount()??0)+(evolution?.activeCount()??0) });
-    goals = new GoalManager(store,{canStart:provider=>initialized&&!accounts?.isMutating(provider)&&!evolution?.hasUnconfirmed(provider),additionalActive:()=>(manager?.activeCount?.()??0)+(evolution?.activeCount()??0)});
+    goals = new GoalManager(store,{canStart:provider=>initialized&&!accounts?.isMutating(provider)&&!evolution?.hasUnconfirmed(provider),additionalActive:()=>(manager?.activeCount?.()??0)+(evolution?.activeCount()??0),acceptedBase:async id=>{if(!manager?.acceptedBase)throw localError('La ejecución administrada no está disponible.',503);return manager.acceptedBase(id);}});
+    conversations=new ConversationManager(store,goals,{
+      cancel:id=>manager!.cancel(id),resumeManaged:async id=>{if(!manager?.resumeManaged)throw localError('La ejecución administrada no está disponible.',503);return manager.resumeManaged(id);},isActive:id=>manager?.isActive?.(id)??false,
+      acceptedBase:async id=>{if(!manager?.acceptedBase)throw localError('La ejecución administrada no está disponible.',503);return manager.acceptedBase(id);},
+      startManaged:async(...args)=>{if(!manager?.startManaged)throw localError('La ejecución administrada no está disponible.',503);return manager.startManaged(...args);},
+      checkpoint:async id=>manager?.checkpoint?manager.checkpoint(id):null,
+    },{canStart:()=>initialized});
     evolution=new EvolutionManager(store,{canStart:provider=>initialized&&!accounts?.isMutating(provider)&&!goals?.hasUnconfirmed(provider),additionalActive:()=>(manager?.activeCount?.()??0)+(goals?.activeCount()??0)});
     accounts = options.accounts ?? new AccountManager(store, { isBusy: provider => manager!.isBusy(provider)||goals!.isBusy(provider)||evolution!.isBusy(provider) });
     await evolution.initialize();
     await goals.initialize();
     await manager.initialize();
+    await conversations.initialize();
     initialized=true;manager.wake?.();goals.wake();evolution.wake();
     await new Promise<void>((resolveListen, reject) => {
       server.once("error", reject);
@@ -256,12 +271,13 @@ export async function startLocalServer(options: LocalServerOptions) {
     const address = server.address(); if (!address || typeof address === "string") throw new Error("No se pudo resolver el puerto local.");
     url = `http://127.0.0.1:${address.port}`;
   } catch (error) {
-    await accounts?.close().catch(() => {}); await evolution?.shutdown().catch(()=>{}); await goals?.shutdown().catch(()=>{}); await manager?.shutdown().catch(() => {}); await release();
+    await conversations?.shutdown().catch(()=>{});await accounts?.close().catch(() => {}); await evolution?.shutdown().catch(()=>{}); await goals?.shutdown().catch(()=>{}); await manager?.shutdown().catch(() => {}); await release();
     if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") throw Object.assign(new Error(`El puerto ${options.port} está ocupado. Elige otro puerto para Salem.`), { code: "EADDRINUSE" });
     throw error;
   }
   const close = (): Promise<void> => closePromise ??= (async () => {
     closing = true;initialized=false; let failure: unknown;
+    try{await conversations!.shutdown();}catch(error){failure=error;}
     try { await accounts!.close(); } catch (error) { failure = error; }
     try { await evolution!.shutdown(); } catch(error){failure??=error;}
     try { await goals!.shutdown(); } catch(error){failure??=error;}
@@ -270,5 +286,5 @@ export async function startLocalServer(options: LocalServerOptions) {
     sessions.clear(); await release();
     if (failure) throw new Error("No se pudo confirmar el cierre completo de las operaciones de Salem.");
   })();
-  return { url, store, manager, accounts, goals, close };
+  return { url, store, manager, accounts, goals, conversations, close };
 }
