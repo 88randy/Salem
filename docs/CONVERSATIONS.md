@@ -34,6 +34,10 @@ Los mensajes de Salem citan su investigación o ejecución de origen. El chat pr
 
 Los agentes reciben también recibos compactos de los pasos anteriores de su cadena. Antes de enviarlos, Salem comprueba la propiedad de las copias, los checkpoints, las pruebas de checks y las sesiones independientes de implementación y revisión. Así, el revisor final puede comprobar condiciones históricas sin acceder a carpetas ajenas a su tarea. Esos recibos no sustituyen la aceptación actual, no amplían permisos y conservan el hash del runtime que produjo cada resultado. Si exceden el presupuesto de contexto, el flujo se detiene y conserva la evidencia.
 
+Salem separa la implementación de la revisión: el implementador verifica su cambio y devuelve el resultado; después el controlador inicia al revisor en otra sesión. Se evita encargar una segunda revisión dentro de la implementación para duplicar esa etapa. Los resúmenes de intentos previos se envían como extractos identificados, conservando los hallazgos estructurados completos y el resultado original en disco. Los criterios, el diff y los recibos de checks no se recortan con esa compactación.
+
+Estas medidas reducen trabajo repetido, pero no garantizan un consumo fijo. El presupuesto cuenta los tokens que informa el CLI, incluidos los de entrada en caché cuando el proveedor los incluye en ese total. Un check verde o un verdict favorable no permite ignorar el presupuesto: si se alcanza, la ejecución se detiene y conserva la evidencia. No se cambia de modelo ni se amplía el límite automáticamente.
+
 La entrega conversacional es local. El resultado permanece en la última copia aceptada, accesible desde el detalle. Publicar, integrar o desplegar requiere un flujo explícito de entrega con sus capacidades delegadas; iniciar el chat no publica automáticamente.
 
 ## Límites actuales
