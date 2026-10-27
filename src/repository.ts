@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readlink, realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { lstat, readdir, readFile, readlink, realpath } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { runProcess, redact } from "./process.js";
 import { digest } from "./state-store.js";
 import { isInside } from "./config.js";
@@ -32,19 +32,32 @@ export async function repositorySnapshot(root: string): Promise<RepositorySnapsh
   const gitDir = await realpath(metadata?.[1] ?? (await git(root, "rev-parse", "--absolute-git-dir")).trim());
   const status = await git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all");
   const paths = await repositoryFiles(root);
+  const staged = (await git(root, "ls-files", "--stage", "-z")).split("\0");
+  if (staged.some(entry => entry.startsWith("160000 "))) throw new Error("Submodules require a project adapter");
   const hash = createHash("sha256"); let bytes = 0;
-  for (const path of [...new Set(paths)].sort()) {
+  const seen = new Set<string>();
+  async function hashPath(path: string): Promise<void> {
     const file = resolve(root, path);
+    if (seen.has(file)) return;
+    seen.add(file);
     if (!isInside(root, file)) throw new Error("Git file escapes worktree");
     hash.update(JSON.stringify(path));
     try {
-      const stat = await lstat(file); bytes += stat.size;
-      if (stat.size > 20_000_000 || bytes > 100_000_000) throw new Error("Worktree fingerprint size budget exceeded");
+      if (!isInside(root, await realpath(dirname(file)))) throw new Error("Git file escapes worktree");
+      const stat = await lstat(file);
+      if (!stat.isDirectory()) {
+        bytes += stat.size;
+        if (stat.size > 20_000_000 || bytes > 100_000_000) throw new Error("Worktree fingerprint size budget exceeded");
+      }
       if (stat.isSymbolicLink()) hash.update(`link:${await readlink(file)}`);
       else if (stat.isFile()) { hash.update(`file:${stat.mode & 0o111}:`); hash.update(await readFile(file)); }
-      else throw new Error("Unsupported worktree entry (submodules require a project adapter)");
-    } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") hash.update("missing"); else throw e; }
+      else if (stat.isDirectory()) {
+        hash.update("directory:");
+        for (const name of (await readdir(file)).sort()) await hashPath(`${path}/${name}`);
+      } else throw new Error("Unsupported worktree entry");
+    } catch (e) { if (["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "")) hash.update("missing"); else throw e; }
   }
+  for (const path of [...new Set(paths)].sort()) await hashPath(path);
   // Include index/staging changes even if working bytes remain identical.
   hash.update(await git(root, "diff", "--cached", "--raw", "-z", "HEAD"));
   return { root, gitDir, head, treeHash: hash.digest("hex"), dirty: status.length > 0 };
