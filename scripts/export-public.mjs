@@ -7,17 +7,20 @@ import {createHash} from 'node:crypto';
 const roots=new Set(['README.md','CITATION.cff','LICENSE','THIRD_PARTY_NOTICES.md','CONTRIBUTING.md','SECURITY.md','CHANGELOG.md','.gitignore','.gitattributes','package.json','package-lock.json','tsconfig.json','playwright.config.ts']);
 const guides=new Set(['SALEM.md','CITATION.md','WINDOWS.md','MODELS.md','CHECKS.md','DELIVERY.md','SUPERVISOR.md','METRICS.md','PROVENANCE.md','CONVERSATIONS.md','RELEASE-0.3.0.md','RELEASE-0.4.0.md','RELEASE-0.5.0.md','RELEASE-0.5.1.md']);
 const directories=new Set(['src','ui','tests','fixtures','templates','evals','profiles','scripts','.github']);
-const excluded=new Set(['scripts/codequim-impact.mjs','profiles/codequim.example.json','scripts/demo-acceptance.mjs','scripts/demo-recovery.mjs']);
-function included(path){return !excluded.has(path)&&(roots.has(path)||(path.startsWith('docs/')&&guides.has(path.slice(5)))||directories.has(path.split('/')[0]));}
+const excluded=new Set(['scripts/demo-acceptance.mjs','scripts/demo-recovery.mjs']);
+// Private external-project files stay local; matched by exact path SHA-256 so their names are not published.
+const privateDigests=new Set(['00fd27001a5d2814300e407b1d5428579e8de5dec6967618dacc5b623f296855','b6a18744954afcab1a1ea25517f2e401a9ab9ace926797f3270d14fdd704f0bc']);
+const pathDigest=path=>createHash('sha256').update(path).digest('hex');
+function included(path,excludedDigests=privateDigests){return !excluded.has(path)&&!excludedDigests.has(pathDigest(path))&&(roots.has(path)||(path.startsWith('docs/')&&guides.has(path.slice(5)))||directories.has(path.split('/')[0]));}
 function git(root,args){return execFileSync('git',args,{cwd:root,windowsHide:true,maxBuffer:25_000_000});}
-export async function exportPublic({root,destination}){
+export async function exportPublic({root,destination,excludedDigests=privateDigests}){
  root=resolve(root);destination=resolve(destination);
  if(destination===root)throw new Error('El destino no puede ser el origen.');
  try{await access(destination);throw new Error('El destino debe ser una carpeta nueva; ya existe.');}catch(e){if(e.code!=='ENOENT')throw e;}
  const parent=await lstat(dirname(destination));if(!parent.isDirectory()||parent.isSymbolicLink())throw new Error('La carpeta padre del destino debe ser un directorio regular.');
  const sourceCommit=git(root,['rev-parse','--verify','HEAD^{commit}']).toString().trim();
  const tree=git(root,['ls-tree','-r','-z',sourceCommit]).toString('utf8').split('\0').filter(Boolean),files=[];
- for(const item of tree){const tab=item.indexOf('\t'),path=item.slice(tab+1);if(!included(path))continue;
+ for(const item of tree){const tab=item.indexOf('\t'),path=item.slice(tab+1);if(!included(path,excludedDigests))continue;
   const mode=item.slice(0,item.indexOf(' '));if(!['100644','100755'].includes(mode))throw new Error(`Archivo público no regular: ${path}`);
   if(isAbsolute(path)||path.split('/').some(p=>!p||p==='.'||p==='..'||p.includes('\\')))throw new Error('Ruta pública inválida.');
   const output=resolve(destination,path),rel=relative(destination,output);if(rel.startsWith('..')||isAbsolute(rel))throw new Error('La ruta sale de la exportación.');

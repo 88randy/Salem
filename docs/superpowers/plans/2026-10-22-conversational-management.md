@@ -1,6 +1,6 @@
 # Salem: gestión conversacional
 
-Diseño aprobado: objetivo en lenguaje natural, investigación, preguntas de negocio, tareas dependientes, ejecución y revisión desde una conversación. El usuario pidió proceder con criterio; no se requiere otra aprobación del diseño. Implementación en rama `feat/salem-conversational-management` del checkout dedicado de Salem. Codequim queda fuera del trabajo.
+Diseño aprobado: objetivo en lenguaje natural, investigación, preguntas de negocio, tareas dependientes, ejecución y revisión desde una conversación. El usuario pidió proceder con criterio; no se requiere otra aprobación del diseño. Implementación en rama `feat/salem-conversational-management` del checkout dedicado de Salem. Los repositorios externos quedan fuera del trabajo.
 
 ## Contrato
 
@@ -33,11 +33,11 @@ Diseño aprobado: objetivo en lenguaje natural, investigación, preguntas de neg
 
 ## Registro
 
-2026-10-22: inspeccionados contratos, supervisor, investigación y ejecución. Confirmado que `baseExecutionId` exige SHA de commit y no sirve para tareas edit-only. Se implementa continuidad de checkpoint aceptado, sin alterar evaluadores de aceptación. No se usa el directorio de Odessay como checkout de trabajo.
+2026-10-22: inspeccionados contratos, supervisor, investigación y ejecución. Confirmado que `baseExecutionId` exige SHA de commit y no sirve para tareas edit-only. Se implementa continuidad de checkpoint aceptado, sin alterar evaluadores de aceptación. No se usa el directorio de un repositorio externo como checkout de trabajo.
 
 ## Cierre y consumo de contexto
 
-Usuario autoriza continuar y completar la demo solo con Codex. No iniciar pruebas reales con Claude ni modificar Codequim. El último intento consumió 508309 tokens reportados y se detuvo antes de entrega, con aceptación y checks correctos. Se mantiene el presupuesto de 500000 y todas las reglas de aceptación y permisos.
+Usuario autoriza continuar y completar la demo solo con Codex. No iniciar pruebas reales con Claude ni modificar repositorios externos. El último intento consumió 508309 tokens reportados y se detuvo antes de entrega, con aceptación y checks correctos. Se mantiene el presupuesto de 500000 y todas las reglas de aceptación y permisos.
 
 1. Analizar llamadas y prompts guardados: identificar delegación de revisión redundante y narrativas repetidas; no atribuir tokens en caché a un precio no reportado.
 2. Reproducir con regresión la falta de compactación. Reducir resúmenes repetidos con indicador de extracto y acceso al resultado completo; preservar hallazgos, criterios, diff, checks y recibos históricos.

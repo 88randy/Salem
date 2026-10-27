@@ -41,6 +41,6 @@ try {
   const {sum}=await import(pathToFileURL(join(deployment,'app','sum.mjs')));assert.equal(sum(2,3),5);assert.equal(sum(-2,1),-1);
   const report={accepted:true,agentId,runId:final.state.id,base,releaseSha:release,tree:final.state.deliveryJournal.tree,firstStatus:first.state.status,finalStatus:final.state.status,attempts:final.state.attempts.length,
     actions:final.state.deliveryJournal.actions,codeAcceptance:final.state.acceptance,stages:final.state.attempts.map(a=>({stage:a.stage,sessionId:a.result.sessionId,usage:a.result.usage})),
-    prCount:forge.state.pulls.length,deployedCode:join(deployment,'app','sum.mjs'),limitations:['Local Git push/merge and real materialized demo deployment; GitHub REST/CI are a local test service, not real GitHub acceptance.','No Codequim mutation, publication or production deployment.']};
+    prCount:forge.state.pulls.length,deployedCode:join(deployment,'app','sum.mjs'),limitations:['Local Git push/merge and real materialized demo deployment; GitHub REST/CI are a local test service, not real GitHub acceptance.','No external repository mutation, publication or production deployment.']};
   await writeFile(join(dir,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({accepted:true,agentId,runId:report.runId,finalStatus:report.finalStatus,report:join(dir,'report.json')},null,2));
 } finally {await forge.close();}

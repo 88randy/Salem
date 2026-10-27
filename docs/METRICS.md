@@ -81,7 +81,7 @@ supervisor. Un cierre abrupto conserva consumo confirmado y marca duración
 incompleta. Es una baseline reproducible del flujo
 explícito; no es una observación de un humano trabajando con sus herramientas.
 Ambos modos entregan solo un commit local; tarea 5 conserva la aceptación de PR,
-merge y despliegue. No se accede a Codequim o GitHub en este benchmark.
+merge y despliegue. No se accede a repositorios externos ni a GitHub en este benchmark.
 
 Se fijan hashes de protocolo, inputs, ejecutables, versión/configuración del
 agente, instrucciones, aceptación y límites. Se rechazan clones reutilizados,
