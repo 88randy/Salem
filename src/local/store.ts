@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseGoalPlan } from "./planning.js";
 import type { GoalRecord } from "./research-contracts.js";
-import { atomicJson, digest } from "../state-store.js";
+import { atomicJson, digest, jsonText } from "../state-store.js";
 import { defaultSettings } from "./contracts.js";
 import type { ExecutionRecord, LocalSettings, LocalState, ProjectInput, ProjectRecord, TaskInput, TaskRecord } from "./contracts.js";
 import { localError, record, uuid, validateProjectInput, validateSettings, validateTaskInput } from "./validation.js";
@@ -15,20 +15,21 @@ export function appendChat(c:ConversationRecord,message:ChatMessage):void{if(!c.
 const MAX_CATALOG_BYTES=50_000_000;
 export class LocalStore {
   readonly root:string;
+  private readonly maxCatalogBytes:number;
   private ready:Promise<void>|undefined;
   private tail:Promise<unknown>=Promise.resolve();
-  constructor(root:string){this.root=resolve(root);}
+  constructor(root:string,options:{maxCatalogBytes?:number}={}){this.root=resolve(root);this.maxCatalogBytes=options.maxCatalogBytes??MAX_CATALOG_BYTES;}
   private async initialize():Promise<void>{
     await mkdir(this.root,{recursive:true});
     try{await stat(join(this.root,"catalog.json"));}
     catch(e){if((e as NodeJS.ErrnoException).code!=="ENOENT")throw e;
       const value:LocalState={schemaVersion:2,revision:1,settings:defaultSettings(),projects:[],tasks:[],executions:[],goals:[]};
-      await atomicJson(join(this.root,"catalog.json"),{checksum:digest(value),value});}
+      await this.writeCatalog(value);}
   }
   async readState():Promise<LocalState>{
     this.ready??=this.initialize();await this.ready;
     try{
-      if((await stat(join(this.root,"catalog.json"))).size>MAX_CATALOG_BYTES)throw new Error("tamaño excedido");
+      if((await stat(join(this.root,"catalog.json"))).size>this.maxCatalogBytes)throw new Error("tamaño excedido");
       const envelope=JSON.parse(await readFile(join(this.root,"catalog.json"),"utf8")) as {checksum:string;value:LocalState};
       const s=envelope.value;
       if(!s||![1,2].includes(s.schemaVersion)||!Number.isSafeInteger(s.revision)||!Array.isArray(s.projects)||!Array.isArray(s.tasks)||!Array.isArray(s.executions)||(s.goals!==undefined&&!Array.isArray(s.goals))||digest(s)!==envelope.checksum)throw new Error("integridad inválida o versión de catálogo no compatible");
@@ -46,10 +47,14 @@ export class LocalStore {
         await copyFile(join(this.root,'catalog.json'),join(this.root,`catalog.v1-backup-${randomUUID()}.json`),constants.COPYFILE_EXCL);
         s.schemaVersion=2;
       }
-      const envelope={checksum:digest(s),value:s};
-      if(Buffer.byteLength(JSON.stringify(envelope))>MAX_CATALOG_BYTES)throw localError("El catálogo excede el límite de tamaño; los datos anteriores se conservaron.",413);
-      await atomicJson(join(this.root,"catalog.json"),envelope);return structuredClone(result);});
+      await this.writeCatalog(s);return structuredClone(result);});
     this.tail=run.catch(()=>{});return run;
+  }
+  // Every catalog write goes through here so readState can always load what was accepted.
+  private async writeCatalog(value:LocalState):Promise<void>{
+    const envelope={checksum:digest(value),value};
+    if(Buffer.byteLength(jsonText(envelope))>this.maxCatalogBytes)throw localError("El catálogo excede el límite de tamaño; los datos anteriores se conservaron.",413);
+    await atomicJson(join(this.root,"catalog.json"),envelope);
   }
   async saveProject(input:ProjectInput):Promise<ProjectRecord>{return this.change(async s=>{
     const existing=input.id?s.projects.find(p=>p.id===uuid(input.id)):undefined;
