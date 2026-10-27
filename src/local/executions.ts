@@ -10,7 +10,7 @@ import { StateStore,digest } from "../state-store.js";
 import { runProcess, redact } from "../process.js";
 import type { ExecutionDetail, ExecutionRecord, Provider } from "./contracts.js";
 import type { LocalStore } from "./store.js";
-import { localGit } from "./git.js";
+import { localDiff, localGit } from "./git.js";
 import { localError, localText, uuid } from "./validation.js";
 
 const activeStatuses=new Set(["preparing","running"]);
@@ -211,7 +211,7 @@ export class ExecutionManager {
  }
  async detail(id:string):Promise<ExecutionDetail>{
   const execution=await this.store.findExecution(id),run=await this.readRun(execution).catch(()=>null);
-  let diff="";if(execution.workspace){try{await this.ownedWorkspace(execution.workspace,id);diff=await localGit(execution.workspace,["diff","--no-ext-diff","--no-textconv",execution.sourceSha??"HEAD","--"],this.store.root);}catch(error){diff=`No se pudo obtener el diff: ${redact((error as Error).message)}`;}}
+  let diff="";if(execution.workspace){try{await this.ownedWorkspace(execution.workspace,id);diff=await localDiff(execution.workspace,execution.sourceSha??"HEAD",this.store.root);}catch(error){diff=`No se pudo obtener el diff: ${redact((error as Error).message)}`;}}
   const root=await this.ownedPath("executions",uuid(id)),artifacts:{path:string;bytes:number}[]=[];
   const walk=async(dir:string):Promise<void>=>{let entries;try{entries=await readdir(dir,{withFileTypes:true});}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
    for(const entry of entries){if(artifacts.length>=500)break;const file=join(dir,entry.name);if(entry.isSymbolicLink())continue;if(entry.isDirectory())await walk(file);else if(entry.isFile()&&/\.(?:json|log|txt|md)$/.test(entry.name))artifacts.push({path:relative(root,file).replaceAll("\\","/"),bytes:(await lstat(file)).size});}};
