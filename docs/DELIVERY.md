@@ -72,7 +72,7 @@ Esto incluye normalización incidental de archivos limpios por CRLF/filtros:
 preparar el checkout aislado con la política del proyecto antes de empezar;
 la entrega no reescribe archivos para arreglarlo. Submódulos y symlinks no
 materializados requieren adaptación. La construcción raw opera por archivo y
-respeta el presupuesto total; el rendimiento en Codequim aún no está medido.
+respeta el presupuesto total; el rendimiento en repositorios externos grandes aún no está medido.
 
 Git hooks se desactivan para comandos del controlador: convertir sus requisitos
 en checks explícitos. Se fija el hash de la configuración efectiva Git y de los
@@ -147,6 +147,6 @@ node scripts/demo-delivery.mjs claude
 Los últimos dos consumen cuota real. Cada demo usa Git bare local, servicio REST
 de prueba y despliegue local materializado que ejecuta dos asserts sobre sum.mjs.
 Pierde deliberadamente la respuesta de creación de PR y reanuda sin duplicarlo.
-No toca Codequim, GitHub compartido ni producción. Las sesiones de agentes y
+No toca repositorios externos, GitHub compartido ni producción. Las sesiones de agentes y
 usage se guardan separados del fixture. Entrega aceptada no es benchmark;
 métricas e instalación/piloto/CI siguen en tareas 6–7.
