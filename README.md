@@ -144,7 +144,20 @@ Consulta [seguridad](SECURITY.md) y las [notas de versión](https://github.com/8
 | [Supervisor y recuperación](docs/SUPERVISOR.md) | Checkpoints, interrupciones y continuación. |
 | [Entrega y capacidades](docs/DELIVERY.md) | Delegar commits, PR, integración o despliegue. |
 | [Métricas](docs/METRICS.md) | Interpretar mediciones y sus límites. |
+| [Citar Salem](docs/CITATION.md) | Autoría, ORCID y referencia de la versión utilizada. |
 | [Guía completa](docs/SALEM.md) | Consultar el funcionamiento general del framework. |
+
+## Citar Salem
+
+Si utilizas Salem en un trabajo, cita la versión que hayas usado:
+
+> Randy Allan. (2026). *Salem* (versión 0.5.1) [Software]. Zenodo.
+> [https://doi.org/10.5281/zenodo.23679216](https://doi.org/10.5281/zenodo.23679216)
+
+Los metadatos están en [CITATION.cff](CITATION.cff), con el
+[ORCID de Randy Allan](https://orcid.org/0009-0004-9018-8138). Consulta la
+[guía de citación y archivo](docs/CITATION.md) para los datos de la versión
+archivada y la publicación de próximas versiones.
 
 ## Desarrollo
 
