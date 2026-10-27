@@ -87,6 +87,11 @@ artefactos; no es una firma contra procesos con los mismos permisos del usuario.
 
 ## Revisión y reanudación
 
+El contexto de review se captura en `src/review-context.ts`, independientemente
+del diff visual de `ExecutionManager.detail()`. Combina el diff Git con los archivos
+nuevos no ignorados enumerados por `git ls-files --others --exclude-standard`,
+por lo que los archivos de texto no rastreados también llegan al revisor.
+
 Review recibe la tarea, el diff completo dentro del presupuesto, huellas, estados
 de checks, rutas de artefactos y extractos de logs. El contexto rotula esos datos
 como no autoritativos. Se rechaza una revisión de otra versión, sesión compartida
