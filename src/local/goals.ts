@@ -28,7 +28,8 @@ export class GoalManager {
   for(const g of (await this.store.readState()).goals??[]){
    const problem=await this.refreshLeaseState(g);
    if(problem&&g.status!=="investigating")await this.store.patchGoal(g.id,{status:g.status==="materialized"?"materialized":"blocked",reason:problem});
-   if(g.status==="investigating")await this.store.patchGoal(g.id,{status:problem?"blocked":"interrupted",reason:problem??"La investigación se interrumpió. Se conservó su evidencia; reintenta explícitamente para iniciar otro intento.",finishedAt:Date.now(),attempts:g.attempts.map(a=>a.status==="running"?{...a,status:"interrupted",finishedAt:Date.now(),error:"Cierre antes de confirmar el plan."}:a)});
+   if(!problem&&g.status==="queued"&&g.cancelRequested)await this.store.patchGoal(g.id,{status:"cancelled",cancelRequested:false,finishedAt:Date.now(),reason:"Cancelado antes de iniciar."});
+   if(g.status==="investigating")await this.store.patchGoal(g.id,{status:problem?"blocked":g.cancelRequested?"cancelled":"interrupted",cancelRequested:false,reason:problem??(g.cancelRequested?"Cancelado; Salem se reinició antes de confirmar el cierre del agente. Se conservó su evidencia.":"La investigación se interrumpió. Se conservó su evidencia; reintenta explícitamente para iniciar otro intento."),finishedAt:Date.now(),attempts:g.attempts.map(a=>a.status==="running"?{...a,status:"interrupted",finishedAt:Date.now(),error:"Cierre antes de confirmar el plan."}:a)});
   }
   if(this.options.autoStart!==false){this.timer=setInterval(()=>this.wake(),1000);this.timer.unref();this.wake();}
  }
@@ -53,22 +54,33 @@ export class GoalManager {
   const saved=await this.store.saveGoal(goal);if(this.options.autoStart!==false)this.wake();return saved;
  });}
  async cancel(id:string):Promise<GoalRecord>{return this.serialized(async()=>{
-  const g=await this.store.findGoal(id),active=this.active.get(id);
-  if(g.status==="queued")return this.store.patchGoal(id,{status:"cancelled",finishedAt:Date.now(),reason:"Cancelado antes de iniciar."});
-  if(active&&g.status==="investigating"){active.controller.abort();return this.store.patchGoal(id,{reason:"Cancelación solicitada; esperando el cierre del agente."});}return g;
+  const g=await this.store.findGoal(id);
+  if(g.status==="needs_input"||g.status==="ready")return this.store.patchGoal(id,{status:"cancelled",finishedAt:Date.now(),reason:"Cancelado antes de crear la tarea."});
+  if(g.status!=="queued"&&g.status!=="investigating"&&g.status!=="cancelled")throw localError(`Este objetivo ya terminó (${g.status}) y no puede cancelarse.`,409);
+  return this.stop(g);
  });}
+ /** Stops any research an owner (such as a conversation) started; a goal that already finished is returned as is. */
+ async halt(id:string):Promise<GoalRecord>{return this.serialized(async()=>this.stop(await this.store.findGoal(id)));}
+ private async stop(g:GoalRecord):Promise<GoalRecord>{
+  const active=this.active.get(g.id);
+  // A claimed goal may still read "queued" until execute() persists "investigating"; aborting covers both.
+  if(active&&(g.status==="queued"||g.status==="investigating")){active.controller.abort();return this.store.patchGoal(g.id,{cancelRequested:true,reason:"Cancelación solicitada; esperando el cierre del agente."});}
+  if(g.status==="queued")return this.store.patchGoal(g.id,{status:"cancelled",finishedAt:Date.now(),reason:"Cancelado antes de iniciar."});
+  if(g.status==="investigating"){const problem=await this.refreshLeaseState(g);return this.store.patchGoal(g.id,{status:problem?"blocked":"cancelled",cancelRequested:false,reason:problem??"Cancelado; ningún agente estaba ejecutando esta investigación.",finishedAt:Date.now(),attempts:g.attempts.map(a=>a.status==="running"?{...a,status:"cancelled",finishedAt:Date.now(),error:"Cancelado sin un agente activo."}:a)});}
+  return g;
+ }
  async retry(id:string,revision:number):Promise<GoalRecord>{return this.serialized(async()=>{
   const g=await this.store.findGoal(id);if(!["failed","blocked","cancelled","interrupted"].includes(g.status))throw localError("Este objetivo no puede reintentarse en su estado actual.",409);
   const problem=await this.refreshLeaseState(g);if(problem)throw localError(problem,409);
   if(this.options.canStart?.(g.project.config.agents[g.agentId]!.provider)===false)throw localError("Espera a que termine la conexión de la cuenta.",409);
-  const saved=await this.store.patchGoal(id,{status:"queued",finishedAt:null,reason:null,plan:null},revision);if(this.options.autoStart!==false)this.wake();return saved;
+  const saved=await this.store.patchGoal(id,{status:"queued",finishedAt:null,reason:null,plan:null,cancelRequested:false},revision);if(this.options.autoStart!==false)this.wake();return saved;
  });}
  async answer(id:string,revision:number,text:string):Promise<GoalRecord>{return this.serialized(async()=>{
   const g=await this.store.findGoal(id);if(g.status!=="needs_input")throw localError("El objetivo no tiene preguntas pendientes.",409);
   if(this.options.canStart?.(g.project.config.agents[g.agentId]!.provider)===false)throw localError("Espera a que termine la conexión de la cuenta.",409);
   const answer=localText(text,"respuesta",20000).trim();if(g.answers.length>=20)throw localError("Se alcanzó el límite de aclaraciones. Crea un objetivo con el contexto consolidado.",409);
   const problem=await this.refreshLeaseState(g);if(problem)throw localError(problem,409);
-  const saved=await this.store.patchGoal(id,{status:"queued",finishedAt:null,reason:null,answers:[...g.answers,{at:Date.now(),text:answer,questions:[...(g.plan?.questions??[])]}]},revision);if(this.options.autoStart!==false)this.wake();return saved;
+  const saved=await this.store.patchGoal(id,{status:"queued",finishedAt:null,reason:null,cancelRequested:false,answers:[...g.answers,{at:Date.now(),text:answer,questions:[...(g.plan?.questions??[])]}]},revision);if(this.options.autoStart!==false)this.wake();return saved;
  });}
  wake():void{if(this.closed||this.pumping)return;this.pumping=true;void this.pump().catch(()=>{}).finally(()=>{this.pumping=false;});}
  private async pump():Promise<void>{
