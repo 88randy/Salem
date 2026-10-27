@@ -66,7 +66,10 @@ export class GoalManager {
   // A claimed goal may still read "queued" until execute() persists "investigating"; aborting covers both.
   if(active&&(g.status==="queued"||g.status==="investigating")){active.controller.abort();return this.store.patchGoal(g.id,{cancelRequested:true,reason:"Cancelación solicitada; esperando el cierre del agente."});}
   if(g.status==="queued")return this.store.patchGoal(g.id,{status:"cancelled",finishedAt:Date.now(),reason:"Cancelado antes de iniciar."});
-  if(g.status==="investigating"){const problem=await this.refreshLeaseState(g);return this.store.patchGoal(g.id,{status:problem?"blocked":"cancelled",cancelRequested:false,reason:problem??"Cancelado; ningún agente estaba ejecutando esta investigación.",finishedAt:Date.now(),attempts:g.attempts.map(a=>a.status==="running"?{...a,status:"cancelled",finishedAt:Date.now(),error:"Cancelado sin un agente activo."}:a)});}
+  if(g.status==="investigating"){const problem=await this.refreshLeaseState(g);
+   // execute() may persist its result while the lease is checked: only the revision we read is orphaned.
+   try{return await this.store.patchGoal(g.id,{status:problem?"blocked":"cancelled",cancelRequested:false,reason:problem??"Cancelado; ningún agente estaba ejecutando esta investigación.",finishedAt:Date.now(),attempts:g.attempts.map(a=>a.status==="running"?{...a,status:"cancelled",finishedAt:Date.now(),error:"Cancelado sin un agente activo."}:a)},g.revision);}
+   catch(error){if((error as {status?:number}).status!==409)throw error;return this.stop(await this.store.findGoal(g.id));}}
   return g;
  }
  async retry(id:string,revision:number):Promise<GoalRecord>{return this.serialized(async()=>{

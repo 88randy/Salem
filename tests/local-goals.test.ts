@@ -120,3 +120,13 @@ test("a queued goal cancels immediately while its provider account is connecting
  const f=await fixture(),{GoalManager}=await import("../src/local/goals.js");let connecting=false;const m=new GoalManager(f.store,{autoStart:false,canStart:()=>!connecting});await m.initialize();
  try{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"connecting"});connecting=true;m.wake();await new Promise(r=>setTimeout(r,150));assert.equal(m.isActive(g.id),false);assert.equal((await f.store.findGoal(g.id)).status,"queued");const c=await m.cancel(g.id);assert.equal(c.status,"cancelled");connecting=false;m.wake();await new Promise(r=>setTimeout(r,150));assert.equal((await f.store.findGoal(g.id)).status,"cancelled");assert.equal(m.isActive(g.id),false);}finally{await m.shutdown();}
 });
+test("halting an apparently orphaned investigation keeps a result that completed while the lease was checked",async()=>{
+ const f=await fixture(),{GoalManager}=await import("../src/local/goals.js"),m=new GoalManager(f.store,{autoStart:false});await m.initialize();
+ try{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"orphan-race"}),attempt={id:"00000000-0000-4000-8000-000000000002",startedAt:Date.now(),finishedAt:null,status:"running" as const,error:null,usage:null,sessionId:null,durationMs:null};
+ await f.store.patchGoal(g.id,{status:"investigating",attempts:[attempt]});
+ // Simulate execute() persisting its result during the lease check that follows the stale read.
+ const internal=m as unknown as {refreshLeaseState(goal:GoalRecord):Promise<string|null>},refresh=internal.refreshLeaseState.bind(m);
+ internal.refreshLeaseState=async goal=>{const problem=await refresh(goal);await f.store.patchGoal(g.id,{status:"ready",finishedAt:Date.now(),attempts:[{...attempt,status:"succeeded",finishedAt:Date.now()}]});return problem;};
+ const h=await m.halt(g.id),saved=await f.store.findGoal(g.id);
+ assert.equal(h.status,"ready");assert.equal(saved.status,"ready");assert.equal(saved.attempts[0]!.status,"succeeded");}finally{await m.shutdown();}
+});
