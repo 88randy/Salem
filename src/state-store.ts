@@ -9,8 +9,10 @@ export function digest(value: unknown): string {
     ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => [k, stable(x)])) : v;
   return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
+// Size budgets must measure this exact text: it is what atomicJson writes.
+export function jsonText(value: unknown): string { return JSON.stringify(value, null, 2); }
 export async function atomicJson(file: string, value: unknown): Promise<void> {
-  const text = JSON.stringify(value, null, 2); // serialize before touching the checkpoint
+  const text = jsonText(value); // serialize before touching the checkpoint
   await mkdir(dirname(file), { recursive: true });
   const temp = `${file}.${randomUUID()}.tmp`;
   const handle = await open(temp, "wx", 0o600);
@@ -41,7 +43,7 @@ export class StateStore {
   }
   async write(id: string, value: unknown): Promise<void> {
     const envelope = { schemaVersion: 1, checksum: digest(value), value };
-    if (Buffer.byteLength(JSON.stringify(envelope, null, 2)) > MAX_CHECKPOINT_BYTES) throw new Error("Checkpoint size budget exceeded; last durable state preserved");
+    if (Buffer.byteLength(jsonText(envelope)) > MAX_CHECKPOINT_BYTES) throw new Error("Checkpoint size budget exceeded; last durable state preserved");
     await atomicJson(join(this.directory(id), "state.json"), envelope);
   }
   async read(id: string): Promise<Record<string, unknown>> {
