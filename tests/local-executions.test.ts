@@ -1,9 +1,11 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {mkdtemp,readFile,writeFile,mkdir,symlink,rm,readdir} from "node:fs/promises";
+import {randomBytes,randomUUID} from "node:crypto";
+import {mkdtemp,readFile,writeFile,mkdir,symlink,rm,readdir,copyFile,chmod} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join,resolve} from "node:path";
 import {LocalStore} from "../src/local/store.js";
+import {runProcess} from "../src/process.js";
 import {git} from "./supervisor-fixture.js";
 
 async function modules(){
@@ -109,6 +111,44 @@ test("a detected local-only profile completes with checked code and a diff witho
  const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await f.store.saveProject({...project,config});const m=new Manager(f.store);await m.initialize();
  try{const e=await m.start(task.id,"local-only");const done=await until(async()=>{const r=await f.store.findExecution(e.id);return ["completed","failed","blocked"].includes(r.status)?r:undefined;});assert.equal(done.status,"completed",done.reason??"");const detail=await m.detail(e.id);assert.equal(detail.metrics?.accepted,true);assert.equal(detail.run?.acceptance?.accepted,true);assert.equal(await git(done.workspace!,"rev-parse","HEAD"),done.sourceSha);assert.match(detail.diff,/return a\+b/);assert.match(detail.run?.delivery?.summary??"",/local|commit|diff/i);
  }finally{await m.shutdown();}
+});
+async function workTree(root:string):Promise<string>{
+ // Tree of the work tree as Git sees it, computed with a throwaway index so the real index is untouched.
+ const dir=await mkdtemp(join(tmpdir(),"salem tree ")),index=join(dir,"index");
+ try{await copyFile(join(root,".git","index"),index);for(const args of [["add","--all"],["write-tree"]]){const r=await runProcess({command:["git",...args],cwd:root,env:{GIT_INDEX_FILE:index},timeoutMs:30000,maxOutputBytes:200000});if(r.status!=="exited"||r.exitCode!==0)throw Error(r.stderr);if(args[0]==="write-tree")return r.stdout.trim();}throw Error("unreachable");}
+ finally{await rm(dir,{recursive:true,force:true});}
+}
+test("an accepted execution exports a binary-safe patch that rebuilds its tree on a fresh clone of sourceSha",async()=>{
+ const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await f.store.saveProject({...project,config});const m=new Manager(f.store);await m.initialize();
+ try{
+  assert.equal(typeof m.patch,"function","patch export missing");
+  const e=await m.start(task.id,"patch");const done=await until(async()=>{const r=await f.store.findExecution(e.id);return ["completed","failed","blocked"].includes(r.status)?r:undefined;});assert.equal(done.status,"completed",done.reason??"");
+  const ws=done.workspace!,bytes=Buffer.from(Array.from({length:256},(_,i)=>i).filter(i=>i!==13));
+  await mkdir(join(ws,"new dir","deep"),{recursive:true});await writeFile(join(ws,"new dir","deep","asset.bin"),bytes);await writeFile(join(ws,"new dir","notes.txt"),"nested\n");
+  await rm(join(ws,"AGENTS.md"));await writeFile(join(ws,"staged.txt"),"staged addition\n");await git(ws,"add","staged.txt");
+  await chmod(join(ws,"sum.mjs"),0o755);await git(ws,"update-index","--chmod=+x","sum.mjs");
+  const status=await git(ws,"status","--porcelain=v1","--untracked-files=all"),index=await readFile(join(ws,".git","index"));
+  const patch=await m.patch(e.id);
+  assert.deepEqual(await readFile(join(ws,".git","index")),index);assert.equal(await git(ws,"status","--porcelain=v1","--untracked-files=all"),status);
+  assert.ok(Buffer.isBuffer(patch.data));assert.match(patch.name,/^salem-[a-f0-9]{8}\.patch$/);
+  const text=patch.data.toString("latin1");assert.match(text,/GIT binary patch/);assert.match(text,/deleted file mode/);assert.match(text,/new mode 100755/);assert.match(text,/return a\+b/);assert.match(text,/^index [a-f0-9]{40}\.\.[a-f0-9]{40}/m);
+  const clone=join(f.root,"fresh clone"),file=join(f.root,"accepted.patch");await git(f.root,"clone","--quiet","--no-checkout",project.config.repoRoot,clone);await git(clone,"checkout","--quiet","--detach",done.sourceSha!);await writeFile(file,patch.data);
+  await git(clone,"apply","--index",file);
+  assert.equal(await git(clone,"write-tree"),await workTree(ws));assert.deepEqual(await readFile(join(clone,"new dir","deep","asset.bin")),bytes);
+  assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch)-/.test(name)),false);
+  await writeFile(join(ws,"large.bin"),randomBytes(1_700_000));await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===413&&/límite/.test(error.message));
+  assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch)-/.test(name)),false);
+  await rm(ws,{recursive:true,force:true});await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===410);
+ }finally{await m.shutdown();}
+});
+test("patch export rejects unknown and not accepted executions",async()=>{
+ const f=await diffFixture();
+ try{
+  assert.equal(typeof f.m.patch,"function","patch export missing");
+  await assert.rejects(f.m.patch(randomUUID()),(error:Error&{status?:number})=>error.status===404);
+  await assert.rejects(f.m.patch(f.e.id),(error:Error&{status?:number})=>error.status===409);
+  await f.store.patchExecution(f.e.id,{status:"completed"});await assert.rejects(f.m.patch(f.e.id),(error:Error&{status?:number})=>error.status===409);
+ }finally{await f.m.shutdown();}
 });
 test("duplicate starts reserve once, freeze configuration and cancel a queued execution",async()=>{
  const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),m=new Manager(f.store,{autoStart:false});await m.initialize();

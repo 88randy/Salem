@@ -29,6 +29,7 @@ async function fixture(extra: { sessionTtlMs?: number; realManager?: boolean } =
     async resume(id: string) { calls.push("resume"); return { id, status: "queued" }; },
     async detail(id: string) { calls.push("detail"); return { execution: { id }, run: null, metrics: null, diff: "fixture", artifacts: [] }; },
     async artifact(id: string, path: string, offset: number) { calls.push("artifact"); if (path.includes("..")) throw Object.assign(new Error("Ruta rechazada"), { status: 400 }); return { text: `${id}:${path}:${offset}`, truncated: false, nextOffset: null }; },
+    async patch(id: string) { calls.push("patch"); if (id.startsWith("0")) throw Object.assign(new Error("No aceptada"), { status: 409 }); return { name: `salem-${id.slice(0, 8)}.patch`, data: Buffer.from([0, 1, 2, 255, 10]) }; },
     async shutdown() { calls.push("shutdown"); },
   };
   const start = await startFunction();
@@ -136,8 +137,15 @@ test("execution routes validate UUIDs and delegate only the requested operation"
     const artifact = await fetch(`${s.server.url}/api/executions/${id}/artifact?path=logs/fixture.txt&offset=12`, { headers: { Cookie: s.cookie } });
     assert.equal((await artifact.json() as {text:string}).text, `${id}:logs/fixture.txt:12`);
     assert.equal((await fetch(`${s.server.url}/api/executions/${id}/artifact?path=../private.txt`, { headers: { Cookie: s.cookie } })).status, 400);
+    const patch = await fetch(`${s.server.url}/api/executions/${id}/patch`, { headers: { Cookie: s.cookie } });
+    assert.equal(patch.status, 200); assert.equal(patch.headers.get("content-type"), "application/octet-stream");
+    assert.equal(patch.headers.get("content-disposition"), `attachment; filename="salem-${id.slice(0, 8)}.patch"`); assert.equal(patch.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await patch.arrayBuffer()), Buffer.from([0, 1, 2, 255, 10]));
+    assert.equal((await fetch(`${s.server.url}/api/executions/${id}/patch`)).status, 401);
+    assert.equal((await fetch(`${s.server.url}/api/executions/${id}/patch`, { method: "POST", headers: s.headers, body: "{}" })).status, 404);
+    assert.equal((await fetch(`${s.server.url}/api/executions/0${id.slice(1)}/patch`, { headers: { Cookie: s.cookie } })).status, 409);
     assert.equal((await fetch(`${s.server.url}/api/accounts/unknown/check`, { method: "POST", headers: s.headers, body: "{}" })).status, 400);
-    assert.deepEqual(s.calls, ["initialize","start","detail","cancel","resume","artifact","artifact"]);
+    assert.deepEqual(s.calls, ["initialize","start","detail","cancel","resume","artifact","artifact","patch","patch"]);
   } finally { await s.close(); }
 });
 test("expired sessions cannot mutate and bootstrap issues a fresh browser session", async () => {

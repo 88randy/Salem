@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 test.beforeEach(async({page})=>{await page.addInitScript(()=>localStorage.setItem('salem.ui.advanced','true'));});
 const settings={revision:1,commands:{claude:['claude'],codex:['codex']},maxConcurrentRuns:1,refreshIntervalMs:1000,preferredPort:3210};
 test('empty installation, complete profile and revision conflict preserve user draft',async({page})=>{
@@ -105,4 +106,26 @@ test('data folder is configured in the GUI for the next launch without moving th
  await page.route('**/api/**',async r=>{const path=new URL(r.request().url()).pathname;if(path==='/api/bootstrap')return r.fulfill({json:{csrfToken:'s',state,accounts:[],dataDir:'C:/Salem'}});if(path==='/api/settings'){sent=r.request().postDataJSON();return r.fulfill({json:{...sent,revision:2}});}if(path==='/api/filesystem/directories')return r.fulfill({json:{path:'C:/SalemNext',parent:'C:/',directories:[]}});return r.fulfill({json:{state,accounts:[],dataDir:'C:/Salem'}});});
  await page.goto('/');await page.getByRole('button',{name:'Ajustes',exact:true}).click();await expect(page.getByLabel('Carpeta de datos al reiniciar',{exact:true})).toHaveValue('C:/Salem');await page.getByLabel('Carpeta de datos al reiniciar',{exact:true}).fill('C:/SalemNext');
  await page.getByRole('button',{name:'Elegir carpeta de datos',exact:true}).click();await page.getByRole('button',{name:'Usar esta carpeta',exact:true}).click();await page.getByRole('button',{name:'Guardar ajustes',exact:true}).click();await expect(page.getByRole('status')).toContainText('Ajustes guardados');expect(sent.nextDataDir).toBe('C:/SalemNext');await expect(page.locator('.data-location code').first()).toHaveText('C:/Salem');
+});
+test('accepted executions download the binary patch and show export errors',async({page})=>{
+ const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'demo',repoRoot:'C:/demo',contextFiles:[],agents:{builder:{provider:'codex',command:['codex']}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
+ const spec={id:'DEMO-1',objective:'Corregir suma',scope:['sum.js'],acceptance:['Suma correcta'],references:[]};
+ const base={revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,reason:null,project,task:spec,workspace:'C:/worktree',sourceSha:'abc123',runId:'run-1',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[]};
+ const accepted={...base,id:'11111111-1111-4111-8111-111111111111',status:'completed'},blocked={...base,id:'22222222-2222-4222-8222-222222222222',status:'blocked',task:{...spec,id:'DEMO-2'}};
+ const state={schemaVersion:1,revision:1,settings,projects:[project],tasks:[],executions:[accepted,blocked]},bytes=Buffer.from([0,1,2,255,10]);let patches=0;
+ const detail=(e:typeof accepted,ok:boolean)=>({execution:e,diff:'',artifacts:[],metrics:ok?{accepted:true}:null,run:{id:'run-1',status:e.status,attempts:[],history:[],checks:[],acceptance:{accepted:ok,reasons:[],checkIds:[]},validation:null,delivery:null,deliveryJournal:null}});
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(u.pathname==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/state')return r.fulfill({json:{state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname===`/api/executions/${accepted.id}/patch`){expect(r.request().method()).toBe('GET');patches++;return patches===1?r.fulfill({status:200,body:bytes,headers:{'Content-Type':'application/octet-stream','Content-Disposition':'attachment; filename="salem-11111111.patch"'}}):r.fulfill({status:410,json:{error:'La copia aislada ya no existe; no se puede exportar el parche.'}});}
+  if(u.pathname===`/api/executions/${accepted.id}`)return r.fulfill({json:detail(accepted,true)});
+  if(u.pathname===`/api/executions/${blocked.id}`)return r.fulfill({json:detail(blocked,false)});
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();
+ const rows=page.locator('.list-row');await rows.filter({hasText:'DEMO-2'}).getByRole('button',{name:'Ver ejecución'}).click();
+ await expect(page.getByRole('heading',{name:'DEMO-2',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Descargar parche'})).toHaveCount(0);
+ await page.getByRole('button',{name:'Volver a ejecuciones'}).click();await rows.filter({hasText:'DEMO-1'}).getByRole('button',{name:'Ver ejecución'}).click();
+ const [file]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Descargar parche'}).click()]);
+ expect(file.suggestedFilename()).toBe('salem-11111111.patch');expect(Buffer.compare(await readFile((await file.path())!),bytes)).toBe(0);
+ await page.getByRole('button',{name:'Descargar parche'}).click();await expect(page.getByText('La copia aislada ya no existe; no se puede exportar el parche.')).toBeVisible();expect(patches).toBe(2);
 });

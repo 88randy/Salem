@@ -10,7 +10,7 @@ import { StateStore,digest } from "../state-store.js";
 import { runProcess, redact } from "../process.js";
 import type { ExecutionDetail, ExecutionRecord, Provider } from "./contracts.js";
 import type { LocalStore } from "./store.js";
-import { localDiff, localGit } from "./git.js";
+import { localDiff, localGit, localPatch } from "./git.js";
 import { localError, localText, uuid } from "./validation.js";
 
 const activeStatuses=new Set(["preparing","running"]);
@@ -222,6 +222,16 @@ export class ExecutionManager {
    metrics.limitations.push("Local total is measured preparation plus core wall time, including pauses between resumed invocations; queue time is excluded.");
   }
   await walk(root);return {execution,run,metrics,diff,artifacts};
+ }
+ /** Binary-safe patch of an accepted execution against its source commit; never mutates the copy. */
+ async patch(id:string):Promise<{name:string;data:Buffer}>{
+  const e=await this.store.findExecution(id),run=e.status==="completed"&&!this.active.has(e.id)?await this.readRun(e).catch(()=>null):null;
+  if(!run||!summarizeRun(run).accepted||!e.sourceSha)throw localError("Solo se puede exportar el parche de una ejecución aceptada.",409);
+  if(!e.workspace)throw localError("La ejecución no conserva una copia aislada.",410);
+  try{await this.ownedWorkspace(e.workspace,e.id);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")throw localError("La copia aislada ya no existe; no se puede exportar el parche.",410);throw error;}
+  const data=await localPatch(e.workspace,e.sourceSha,this.store.root);
+  if(!data.length)throw localError("La ejecución aceptada no tiene cambios respecto a su commit de origen.",409);
+  return {name:`salem-${e.id.slice(0,8)}.patch`,data};
  }
  async artifact(id:string,path:string,offset=0):Promise<{text:string;truncated:boolean;nextOffset:number}>{
   await this.store.findExecution(id);localText(path,"ruta del artefacto",2000);
