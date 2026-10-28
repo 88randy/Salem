@@ -19,3 +19,16 @@ test("concurrent diffs of one repository all succeed", async () => {
     for (const diff of diffs) assert.match(diff, /\+new 5/);
   }
 });
+
+// Polling must not pile up work: equivalent requests that are still waiting share one diff.
+test("equivalent waiting diffs share one run", async () => {
+  const root = await mkdtemp(join(tmpdir(), "salem diff share ")), repo = join(root, "repo"), systemDir = join(root, "system");
+  await mkdir(systemDir); await git(root, "init", "-q", repo); await writeFile(join(repo, "tracked.txt"), "baseline\n");
+  await git(repo, "add", "tracked.txt"); await git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m", "base");
+  const sha = await git(repo, "rev-parse", "HEAD");
+  const running = localDiff(repo, sha, systemDir), waiting = [localDiff(repo, sha, systemDir), localDiff(repo, sha, systemDir), localDiff(repo, sha, systemDir)];
+  assert.equal(new Set(waiting).size, 1);
+  const other = localDiff(repo, sha, systemDir, { args: ["--stat"] });
+  assert.ok(!waiting.includes(other));
+  await Promise.all([running, ...waiting, other]);
+});

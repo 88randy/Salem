@@ -34,9 +34,14 @@ async function neutralConversions(root:string,systemDir:string,scratch:string):P
 
 // Diffs of one repository run one at a time: each writes the same empty blob (add --intent-to-add), and
 // concurrent writers of one loose object fail on Windows with "Permission denied".
-const diffQueues=new Map<string,Promise<void>>();
+// Equivalent requests still waiting for their turn share one run, so polling cannot pile up work; the patch
+// export writes to a unique --output and is never shared.
+const diffQueues=new Map<string,Promise<void>>(),waiting=new Map<string,Promise<string>>();
 export function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
- const key=resolve(root),run=(diffQueues.get(key)??Promise.resolve()).then(()=>diffOnce(root,sourceSha,systemDir,shape));
+ const key=resolve(root),same=JSON.stringify([key,sourceSha,systemDir,shape]),pending=waiting.get(same);
+ if(pending)return pending;
+ const run=(diffQueues.get(key)??Promise.resolve()).then(()=>{waiting.delete(same);return diffOnce(root,sourceSha,systemDir,shape);});
+ waiting.set(same,run);
  const settled=run.then(()=>{},()=>{});diffQueues.set(key,settled);
  void settled.then(()=>{if(diffQueues.get(key)===settled)diffQueues.delete(key);});
  return run;
