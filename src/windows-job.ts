@@ -52,8 +52,13 @@ export class WindowsJob {
     for (const stream of [this.stdin, this.stdout, this.stderr]) stream.on("error", () => {});
     this.ready = this.reply().then(line => { if (line !== "ready") throw new Error(`Windows process containment unavailable: ${line}`); });
   }
-  /** Starts the helper and its job; await `ready` before launching. The path parameter exists for tests. */
-  static start(helper = helperPath): WindowsJob {
+  /**
+   * Starts the helper and its job; await `ready` before launching. Production
+   * omits `helper` and always gets the release helper. `helper` is a test seam:
+   * tests pass the fault-injection build (tests/windows-job-test-helper.ts) or a
+   * missing file, directly or through ProcessInput.windowsJobHelper.
+   */
+  static start(helper: string = helperPath): WindowsJob {
     // Absolute path next to this module: PATH must not be able to substitute the helper.
     return new WindowsJob(spawn(helper, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore", "ipc", "pipe", "pipe", "pipe"] }));
   }

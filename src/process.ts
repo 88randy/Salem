@@ -2,7 +2,14 @@ import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
-export interface ProcessInput { command: string[]; cwd: string; input?: string; env?: Record<string, string>; timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; leaseDir?: string }
+export interface ProcessInput { command: string[]; cwd: string; input?: string; env?: Record<string, string>; timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; leaseDir?: string;
+  /**
+   * Test seam, Windows owned runs only: absolute path of the containment helper
+   * build to launch instead of the release helper next to windows-job.ts. Tests
+   * set it to the fault-injection build (dist/tests/windows-job-helper.test.exe);
+   * production callers never set it, so they always get the release helper.
+   */
+  windowsJobHelper?: string }
 export interface ProcessResult { status: "exited" | "failed" | "cancelled" | "timed_out"; exitCode: number | null; stdout: string; stderr: string; error: string | null }
 
 export function redact(text: string): string {

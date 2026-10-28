@@ -52,6 +52,8 @@ export async function verifyPackage(root){
  if(manifest.product!=='Salem'||manifest.schemaVersion!==1||!manifest.files||!/^\d+\.\d+\.\d+(?:[-.][a-zA-Z0-9.-]+)?-[a-f0-9]{16}$/.test(manifest.buildId))throw new Error('Manifest de paquete inválido.');
  for(const [name,hash] of Object.entries(manifest.files))if(!name||name.includes('\\')||name.includes(':')||name.split('/').some(p=>!p||p==='.'||p==='..')||!inside(root,resolve(root,name))||!/^[a-f0-9]{64}$/.test(hash))throw new Error('Ruta o checksum inválido en manifest.');
  const actual=await inventory(root);
+ // The test build of the containment helper (fault-injection hooks) never ships.
+ if(Object.keys(actual).some(name=>/(?:^|\/)dist\/tests\/|windows-job-helper\.test\.exe$/i.test(name)))throw new Error('El paquete contiene artefactos de prueba (dist/tests); no se instala.');
  if(JSON.stringify(Object.entries(actual).sort())!==JSON.stringify(Object.entries(manifest.files).sort()))throw new Error('La integridad/checksum del paquete no coincide; no se instala.');
  if(`${manifest.version}-${identity(actual,manifest)}`!==manifest.buildId)throw new Error('Identidad de build inválida.');
  return manifest;

@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {existsSync} from 'node:fs';
+import {existsSync,mkdirSync} from 'node:fs';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {buildInputHash,writeBuildStamp} from './windows/build-inputs.mjs';
@@ -10,8 +10,13 @@ function windowsHelperCompiler(env=process.env){return join(env.WINDIR??env.Syst
 function buildWindowsHelper(directory){
  if(process.platform!=='win32')return;
  const compiler=windowsHelperCompiler();if(!existsSync(compiler))throw new Error(`Build failed: the Windows containment helper needs ${compiler} (.NET Framework 4.x).`);
- const result=spawnSync(compiler,['/nologo','/target:exe','/platform:x64','/optimize+',`/out:${resolve(directory,'dist','src','windows-job-helper.exe')}`,resolve(directory,'src','windows-job-helper.cs')],{cwd:directory,stdio:'inherit',windowsHide:true});
- if(result.error)throw result.error;if(result.status!==0)throw new Error(`Build failed: csc.exe exited ${result.status??'without status'}`);
+ // Release helper (dist/src: stamped and packaged) has no test hooks. The test
+ // build (dist/tests: never stamped or packaged) adds the fault-injection hooks.
+ for(const [out,extra] of [[resolve(directory,'dist','src','windows-job-helper.exe'),[]],[resolve(directory,'dist','tests','windows-job-helper.test.exe'),['/define:SALEM_TEST_HOOKS']]]){
+  mkdirSync(dirname(out),{recursive:true});
+  const result=spawnSync(compiler,['/nologo','/target:exe','/platform:x64','/optimize+',...extra,`/out:${out}`,resolve(directory,'src','windows-job-helper.cs')],{cwd:directory,stdio:'inherit',windowsHide:true});
+  if(result.error)throw result.error;if(result.status!==0)throw new Error(`Build failed: csc.exe exited ${result.status??'without status'}`);
+ }
 }
 export async function buildApplication(directory=root){
  const before=await buildInputHash(directory);

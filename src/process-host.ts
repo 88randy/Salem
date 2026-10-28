@@ -11,7 +11,8 @@ import { atomicJson } from "./state-store.js";
 import { WindowsJob, controlDeadlineMs } from "./windows-job.js";
 const [leaseFile, token] = process.argv.slice(2);
 const windows = process.platform === "win32";
-type Start = { type: string; command: string[]; cwd: string; timeoutMs: number; env?: Record<string, string> };
+// `jobHelper` is the test seam of ProcessInput.windowsJobHelper; absent, the release helper is used.
+type Start = { type: string; command: string[]; cwd: string; timeoutMs: number; env?: Record<string, string>; jobHelper?: string };
 let child: ChildProcess | undefined; // POSIX agent
 let job: WindowsJob | undefined;
 let contained = false; // Windows: the launch gate is in the job, so the job covers the whole tree.
@@ -77,7 +78,7 @@ function attach(spawned: ChildProcess): void {
   child.on("close", code => { void finish(code ?? 1); });
 }
 async function startContained(message: Start): Promise<void> {
-  job = WindowsJob.start(); // finish() closes it, even while it is still starting
+  job = WindowsJob.start(message.jobHelper); // finish() closes it, even while it is still starting
   try { await job.ready; } catch (e) { process.stderr.write((e as Error).message); void finish(1); return; }
   if (stopping) return;
   const gate = job;

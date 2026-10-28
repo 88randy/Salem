@@ -22,6 +22,15 @@ const fixture = async version => {
   return {root,payload,manifest,installDir:join(root,'Programs With Spaces','Salem'),dataDir:join(root,'SalemData'),shortcutDir:join(root,'Shortcuts')};
 };
 
+test('a package carrying the test build of the containment helper is rejected', async () => {
+  const f = await fixture('0.4.0');
+  await mkdir(join(f.payload, 'app/dist/tests'), {recursive:true});
+  await writeFile(join(f.payload, 'app/dist/tests/windows-job-helper.test.exe'), 'test helper');
+  await writeFile(join(f.payload, 'manifest.json'), JSON.stringify(await packaging.createManifest(f.payload, {version:'0.4.0', sourceRevision:'a'.repeat(40), nodeVersion:'22.23.0'})));
+  await assert.rejects(packaging.verifyPackage(f.payload), /prueba|dist\/tests/i);
+  await packaging.verifyPackage((await fixture('0.4.0')).payload);
+});
+
 test('package management is available without npm or application dependencies', () => {
   assert.equal(typeof packaging.installPackage, 'function', 'Windows installation behavior is missing');
 });
