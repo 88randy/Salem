@@ -55,7 +55,8 @@ export async function repositorySnapshot(root: string, options: { readOnly?: boo
   const paths = await repositoryFiles(root, inert);
   const staged = (await git(root, ...inert, "ls-files", "--stage", "-z")).split("\0");
   if (staged.some(entry => entry.startsWith("160000 "))) throw new Error("Submodules require a project adapter");
-  const hash = createHash("sha256"); let bytes = 0;
+  // The version tag keeps fingerprints from older formats from ever matching this one.
+  const hash = createHash("sha256").update("salem-snapshot-v2\0"); let bytes = 0;
   const seen = new Set<string>();
   async function hashPath(path: string): Promise<void> {
     const file = resolve(root, path);

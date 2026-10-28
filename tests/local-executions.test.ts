@@ -76,6 +76,21 @@ test("snapshots fingerprint files whose names look like secrets",async()=>{
  }finally{await f.m.shutdown();}
 });
 
+test("a forged index stat cache cannot hide a changed file from the diff or patch",async()=>{
+ const f=await diffFixture();
+ try{
+  const {localPatch}=await import("../src/local/git.js"),file=join(f.workspace,"tracked.txt"),sha=(await f.store.findExecution(f.e.id)).sourceSha!;
+  // Record a stat entry for the original bytes, then swap in same-size accepted bytes with the recorded timestamps.
+  await git(f.workspace,"config","--local","core.trustctime","false");await git(f.workspace,"config","--local","core.checkStat","minimal");await git(f.workspace,"update-index","--refresh");
+  const {stat:statFile,utimes}=await import("node:fs/promises"),before=await statFile(file);
+  await writeFile(file,"accepted\n");await utimes(file,before.atime,before.mtime);
+  assert.equal((await statFile(file)).size,before.size);
+  await writeFile(join(f.workspace,"removed.txt"),"visible change\n");
+  const detail=await f.m.detail(f.e.id),patch=(await localPatch(f.workspace,sha,f.store.root)).toString("utf8");
+  for(const text of [detail.diff,patch]){assert.match(text,/\+accepted/);assert.match(text,/\+visible change/);}
+ }finally{await f.m.shutdown();}
+});
+
 test("snapshots cannot be forged by moving bytes between files",async()=>{
  const f=await diffFixture();
  try{

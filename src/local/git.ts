@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, copyFile, open, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, open, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { runProcess } from "../process.js";
 import { localError } from "./validation.js";
@@ -36,14 +36,15 @@ export async function localDiff(root:string,sourceSha:string,systemDir:string,sh
  try{
   const neutral=await neutralConversions(root,systemDir,directory);
   const git=(args:string[],extra:{input?:string;maxOutputBytes?:number;raw?:boolean}={})=>localGit(root,["-c","core.splitIndex=false",...neutral,...args],systemDir,{...options,...extra});
-  // Copy staged membership and modes too (the index holds the executable bit where core.fileMode is false),
-  // including tracked additions now covered by ignore rules.
-  try{await copyFile(resolve(root,await localGit(root,["rev-parse","--git-path","index"],systemDir)),options.indexFile);}
-  catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;await git(["read-tree","HEAD"]);}
-  // assume-unchanged (lowercase tag) and skip-worktree (S/s) make Git trust the index over the work tree: clear them in the copy.
-  const flagged=(await git(["ls-files","-v","-z"],{maxOutputBytes:INDEX_LISTING_LIMIT,raw:true})).split("\0").filter(entry=>/^[a-zS] /.test(entry)).map(entry=>entry.slice(2));
-  // update-index applies one marking option per call, so each flag is cleared separately.
-  if(flagged.length)for(const flag of ["--no-assume-unchanged","--no-skip-worktree"])await git(["update-index",flag,"-z","--stdin"],{input:flagged.join("\0")+"\0"});
+  // Rebuild the temporary index from the real index's entries (mode, object, stage, path): staged membership and
+  // modes survive (the index holds the executable bit where core.fileMode is false, and tracked additions now covered
+  // by ignore rules), while its stat cache, assume-unchanged/skip-worktree flags and extensions do not, so Git rehashes
+  // every work-tree file instead of trusting cached metadata.
+  const real=resolve(root,await localGit(root,["rev-parse","--git-path","index"],systemDir));
+  if(await stat(real).then(()=>true,()=>false)){
+   const entries=await localGit(root,["-c","core.splitIndex=false",...neutral,"ls-files","--stage","-z"],systemDir,{env:options.env,maxOutputBytes:INDEX_LISTING_LIMIT,raw:true});
+   if(entries)await git(["update-index","-z","--index-info"],{input:entries.endsWith("\0")?entries:`${entries}\0`});
+  }else await git(["read-tree","HEAD"]);
   await git(["add","--intent-to-add","--all","--"]);
   return await git([...(shape.config??[]).flatMap(entry=>["-c",entry]),"diff","--no-ext-diff","--no-textconv",...(shape.args??[]),sourceSha,"--"]);
  }finally{await rm(directory,{recursive:true,force:true});}
