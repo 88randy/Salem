@@ -122,7 +122,7 @@ test("ambiguous interpreter options require declared tool inputs and then pin th
 
 test("only Django makemigrations --check --dry-run escapes the discovery-only guard", () => {
   const migrate = ["manage.py", "makemigrations", "--check", "--dry-run"];
-  for (const command of [["python", ...migrate], ["python3", ...migrate], ["python3.12", ...migrate], ["C:\\Py\\python.exe", ...migrate], ["/usr/bin/python3", ...migrate],
+  for (const command of [["python", ...migrate], ["python3", ...migrate], ["python3.12", ...migrate], ...(process.platform === "win32" ? [["C:\\Py\\python.exe", ...migrate]] : []), ["/usr/bin/python3", ...migrate],
     ["python", "manage.py", "makemigrations", "--dry-run", "--check"], ["python", "manage.py", "makemigrations", "app", "--check", "--dry-run"]])
     assert.equal(isDiscoveryOnly(command), false, command.join(" "));
   for (const command of [["python", "manage.py", "makemigrations", "--dry-run"], ["python", "manage.py", "migrate", "--check", "--dry-run"], ["python", "manage.py", "makemigrations", "--check", "--dry-run", "--help"],
