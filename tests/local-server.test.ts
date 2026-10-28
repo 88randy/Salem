@@ -30,6 +30,7 @@ async function fixture(extra: { sessionTtlMs?: number; realManager?: boolean } =
     async detail(id: string) { calls.push("detail"); return { execution: { id }, run: null, metrics: null, diff: "fixture", artifacts: [] }; },
     async artifact(id: string, path: string, offset: number) { calls.push("artifact"); if (path.includes("..")) throw Object.assign(new Error("Ruta rechazada"), { status: 400 }); return { text: `${id}:${path}:${offset}`, truncated: false, nextOffset: null }; },
     async patch(id: string) { calls.push("patch"); if (id.startsWith("0")) throw Object.assign(new Error("No aceptada"), { status: 409 }); return { name: `salem-${id.slice(0, 8)}.patch`, data: Buffer.from([0, 1, 2, 255, 10]) }; },
+    async branch(id: string, name?: string) { calls.push(`branch:${name ?? "default"}`); if (id.startsWith("0")) throw Object.assign(new Error("La rama ya existe"), { status: 409 }); return { ref: `refs/heads/${name ?? "salem/demo"}`, commit: "a".repeat(40) }; },
     async shutdown() { calls.push("shutdown"); },
   };
   const start = await startFunction();
@@ -144,8 +145,17 @@ test("execution routes validate UUIDs and delegate only the requested operation"
     assert.equal((await fetch(`${s.server.url}/api/executions/${id}/patch`)).status, 401);
     assert.equal((await fetch(`${s.server.url}/api/executions/${id}/patch`, { method: "POST", headers: s.headers, body: "{}" })).status, 404);
     assert.equal((await fetch(`${s.server.url}/api/executions/0${id.slice(1)}/patch`, { headers: { Cookie: s.cookie } })).status, 409);
+    const branch = await fetch(`${s.server.url}/api/executions/${id}/branch`, { method: "POST", headers: s.headers, body: JSON.stringify({ name: "salem/mia" }) });
+    assert.equal(branch.status, 201); assert.deepEqual(await branch.json(), { ref: "refs/heads/salem/mia", commit: "a".repeat(40) });
+    assert.equal((await fetch(`${s.server.url}/api/executions/${id}/branch`, { method: "POST", headers: s.headers, body: "{}" })).status, 201);
+    assert.equal((await fetch(`${s.server.url}/api/executions/${id}/branch`, { method: "POST", headers: s.headers, body: JSON.stringify({ name: 7 }) })).status, 400);
+    assert.equal((await fetch(`${s.server.url}/api/executions/${id}/branch`, { method: "POST", headers: s.headers, body: JSON.stringify({ name: "x", force: true }) })).status, 400);
+    assert.equal((await fetch(`${s.server.url}/api/executions/${id}/branch`, { headers: { Cookie: s.cookie } })).status, 405);
+    assert.equal((await fetch(`${s.server.url}/api/executions/${id}/branch`, { method: "POST", headers: { ...s.headers, "X-Salem-CSRF": "wrong" }, body: "{}" })).status, 403);
+    assert.equal((await fetch(`${s.server.url}/api/executions/bad/branch`, { method: "POST", headers: s.headers, body: "{}" })).status, 400);
+    assert.equal((await fetch(`${s.server.url}/api/executions/0${id.slice(1)}/branch`, { method: "POST", headers: s.headers, body: "{}" })).status, 409);
     assert.equal((await fetch(`${s.server.url}/api/accounts/unknown/check`, { method: "POST", headers: s.headers, body: "{}" })).status, 400);
-    assert.deepEqual(s.calls, ["initialize","start","detail","cancel","resume","artifact","artifact","patch","patch"]);
+    assert.deepEqual(s.calls, ["initialize","start","detail","cancel","resume","artifact","artifact","patch","patch","branch:salem/mia","branch:default","branch:default"]);
   } finally { await s.close(); }
 });
 test("expired sessions cannot mutate and bootstrap issues a fresh browser session", async () => {

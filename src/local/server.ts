@@ -17,7 +17,7 @@ import { discoverProject } from "./discovery.js";
 import { localError, localText, record, uuid } from "./validation.js";
 import type { LocalSettings, ProjectInput, Provider, TaskInput } from "./contracts.js";
 
-export interface LocalExecutionManager extends Partial<Pick<ExecutionManager,'acceptedBase'|'startManaged'|'isActive'|'checkpoint'|'resumeManaged'|'patch'>> {
+export interface LocalExecutionManager extends Partial<Pick<ExecutionManager,'acceptedBase'|'startManaged'|'isActive'|'checkpoint'|'resumeManaged'|'patch'|'branch'>> {
   initialize(): Promise<void>;
   start(taskId: string, requestKey: string, baseExecutionId?: string): Promise<unknown>;
   cancel(id: string): Promise<unknown>; resume(id: string): Promise<unknown>;
@@ -182,7 +182,7 @@ export async function startLocalServer(options: LocalServerOptions) {
           }
           json(response, 200, await manager!.detail(id)); return;
         }
-        if (/^\/api\/accounts\/[^/]+\/(?:check|connect|cancel|disconnect|input)$/.test(path) || ["/api/settings", "/api/projects", "/api/tasks", "/api/executions", "/api/projects/demo", "/api/projects/validate", "/api/projects/branches"].includes(path) || /^\/api\/executions\/[^/]+\/(?:cancel|resume)$/.test(path)) throw localError("Esta acción requiere un método de mutación.", 405);
+        if (/^\/api\/accounts\/[^/]+\/(?:check|connect|cancel|disconnect|input)$/.test(path) || ["/api/settings", "/api/projects", "/api/tasks", "/api/executions", "/api/projects/demo", "/api/projects/validate", "/api/projects/branches"].includes(path) || /^\/api\/executions\/[^/]+\/(?:cancel|resume|branch)$/.test(path)) throw localError("Esta acción requiere un método de mutación.", 405);
         throw localError("Ruta de API no encontrada.", 404);
       }
       const input = await body(request);
@@ -219,6 +219,13 @@ export async function startLocalServer(options: LocalServerOptions) {
         const taskId = uuid(input.taskId), key = localText(input.requestKey, "clave de solicitud", 200);
         const baseId = input.baseExecutionId === undefined ? undefined : uuid(input.baseExecutionId);
         json(response, 200, await manager!.start(taskId, key, baseId)); return;
+      }
+      const branch = path.match(/^\/api\/executions\/([^/]+)\/branch$/);
+      if (branch) {
+        const id = uuid(branch[1]); record(input, ["name"]);
+        if (input.name !== undefined && typeof input.name !== "string") throw localError("El nombre de la rama debe ser texto.");
+        if (!manager!.branch) throw localError("La creación de ramas no está disponible.", 503);
+        json(response, 201, await manager!.branch(id, input.name)); return;
       }
       const execution = path.match(/^\/api\/executions\/([^/]+)\/(cancel|resume)$/);
       if (execution) { const id = uuid(execution[1]); json(response, 200, execution[2] === "cancel" ? await manager!.cancel(id) : await manager!.resume(id)); return; }

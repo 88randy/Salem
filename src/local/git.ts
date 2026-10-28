@@ -17,10 +17,15 @@ export async function localGit(root:string,args:string[],systemDir:string,option
  return r.stdout.trim();
 }
 
-export async function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
- const directory=await mkdtemp(join(systemDir,"diff-index-")),options={indexFile:join(directory,"index"),...(shape.env?{env:shape.env}:{})};
+type IndexGit=(args:string[],extra?:{input?:string;maxOutputBytes?:number})=>Promise<string>;
+/**
+ * Runs fn against a private copy of the work tree's index with every work-tree file added, so the diff,
+ * the patch and the branch commit all see the same tree. The real index is never written.
+ */
+async function withWorkTreeIndex<T>(root:string,systemDir:string,intentOnly:boolean,env:Record<string,string>|undefined,fn:(git:IndexGit)=>Promise<T>):Promise<T>{
+ const directory=await mkdtemp(join(systemDir,"diff-index-")),options={indexFile:join(directory,"index"),...(env?{env}:{})};
  try{
-  const git=(args:string[],extra:{input?:string;maxOutputBytes?:number}={})=>localGit(root,["-c","core.splitIndex=false",...args],systemDir,{...options,...extra});
+  const git:IndexGit=(args,extra={})=>localGit(root,["-c","core.splitIndex=false",...args],systemDir,{...options,...extra});
   // Copy staged membership and modes too (the index holds the executable bit where core.fileMode is false),
   // including tracked additions now covered by ignore rules.
   try{await copyFile(resolve(root,await localGit(root,["rev-parse","--git-path","index"],systemDir)),options.indexFile);}
@@ -29,10 +34,15 @@ export async function localDiff(root:string,sourceSha:string,systemDir:string,sh
   const flagged=(await git(["ls-files","-v","-z"],{maxOutputBytes:INDEX_LISTING_LIMIT})).split("\0").filter(entry=>/^[a-zS] /.test(entry)).map(entry=>entry.slice(2));
   // update-index applies one marking option per call, so each flag is cleared separately.
   if(flagged.length)for(const flag of ["--no-assume-unchanged","--no-skip-worktree"])await git(["update-index",flag,"-z","--stdin"],{input:flagged.join("\0")+"\0"});
-  await git(["add","--intent-to-add","--all","--"]);
-  return await git([...(shape.config??[]).flatMap(entry=>["-c",entry]),"diff","--no-ext-diff","--no-textconv",...(shape.args??[]),sourceSha,"--"]);
+  await git(["add",...(intentOnly?["--intent-to-add"]:[]),"--all","--"]);
+  return await fn(git);
  }finally{await rm(directory,{recursive:true,force:true});}
 }
+export async function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
+ return withWorkTreeIndex(root,systemDir,true,shape.env,git=>git([...(shape.config??[]).flatMap(entry=>["-c",entry]),"diff","--no-ext-diff","--no-textconv",...(shape.args??[]),sourceSha,"--"]));
+}
+/** Tree object of the work tree exactly as localPatch exports it; writes only blobs and trees to the object store. */
+export async function localTree(root:string,systemDir:string):Promise<string>{return withWorkTreeIndex(root,systemDir,false,undefined,git=>git(["write-tree"]));}
 
 /**
  * Binary-safe patch of the work tree (untracked, non-ignored files included) against sourceSha.
