@@ -99,6 +99,50 @@ test('a discarded cart suggestion is never prefilled into another project',async
  await expect(page.getByLabel('Proyecto del objetivo')).toHaveValue('cart-p');await expect(page.getByLabel('Qué quieres lograr')).toHaveValue('');
  expect(conversations).toEqual([]);
 });
+test('creating the cart asks before replacing a typed goal and keeps it when declined',async({page})=>{
+ const goal='Completa el carrito de cart.mjs: calcula el subtotal, el costo de envío y el total. Conserva la API y los verificadores existentes.';
+ const project=(id:string,name:string)=>({id,revision:1,name,archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:id,repoRoot:'C:/Salem/'+id,contextFiles:[],agents:{codex:{provider:'codex',command:['codex']}},supervisor:{roles:roles('codex','codex')},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}});
+ const other=project('other-p','Proyecto existente'),cart=project('cart-p','Ejemplo carrito'),conversations:any[]=[],dialogs:string[]=[];let current:any={...state,projects:[other]};
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(['/api/bootstrap','/api/state'].includes(u.pathname))return r.fulfill({json:{csrfToken:'csrf',state:current,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/projects/demo/plan')return r.fulfill({json:{roles:roles('codex','codex'),selected:'codex',fallback:false,crossProvider:false,estimates:[estimate('codex',['define','build','review'])]}});
+  if(u.pathname==='/api/projects/demo'){current={...state,projects:[other,cart]};return r.fulfill({json:{project:cart,goal}});}
+  if(u.pathname==='/api/conversations'){conversations.push(r.request().postDataJSON());return r.fulfill({status:500,json:{error:'Sin conversación en la prueba'}});}
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ let accept=false;page.on('dialog',d=>{dialogs.push(d.message());void (accept?d.accept():d.dismiss());});
+ await page.goto('/');
+ await page.getByLabel('Qué quieres lograr').fill('Mi objetivo pendiente');
+ const create=async()=>{await page.getByRole('button',{name:'Crear ejemplo del carrito',exact:true}).click();await page.getByRole('dialog',{name:'Crear ejemplo del carrito'}).getByRole('button',{name:'Confirmar y crear ejemplo',exact:true}).click();await expect(page.getByRole('dialog',{name:'Crear ejemplo del carrito'})).toHaveCount(0);};
+ await create();
+ await expect.poll(()=>dialogs.length).toBe(1);
+ await expect(page.getByRole('status')).toContainText('Ejemplo del carrito creado');
+ await expect(page.getByLabel('Qué quieres lograr')).toHaveValue('Mi objetivo pendiente');
+ await expect(page.getByLabel('Proyecto del objetivo')).toHaveValue('other-p');
+ accept=true;await create();
+ await expect.poll(()=>dialogs.length).toBe(2);
+ await expect(page.getByLabel('Qué quieres lograr')).toHaveValue(goal);
+ await expect(page.getByLabel('Proyecto del objetivo')).toHaveValue('cart-p');
+ expect(conversations).toEqual([]);
+});
+test('navigating while the cart refresh is in flight keeps the user where they went',async({page})=>{
+ const cart={id:'cart-p',revision:1,name:'Ejemplo carrito',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'cart-p',repoRoot:'C:/Salem/cart',contextFiles:[],agents:{codex:{provider:'codex',command:['codex']}},supervisor:{roles:roles('codex','codex')},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
+ let created=false,release:()=>void=()=>{};const held=new Promise<void>(r=>{release=r;});
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(u.pathname==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/state'){if(created)await held;return r.fulfill({json:{state:created?{...state,projects:[cart]}:state,accounts:[],dataDir:'C:/Salem'}});}
+  if(u.pathname==='/api/projects/demo/plan')return r.fulfill({json:{roles:roles('codex','codex'),selected:'codex',fallback:false,crossProvider:false,estimates:[estimate('codex',['define','build','review'])]}});
+  if(u.pathname==='/api/projects/demo'){created=true;return r.fulfill({json:{project:cart,goal:'Objetivo sugerido'}});}
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ await page.goto('/');
+ await page.getByRole('button',{name:'Crear ejemplo del carrito',exact:true}).click();
+ await page.getByRole('dialog',{name:'Crear ejemplo del carrito'}).getByRole('button',{name:'Confirmar y crear ejemplo',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Crear ejemplo del carrito'})).toHaveCount(0);
+ await page.getByRole('navigation').getByRole('button',{name:'Proyectos'}).first().click();
+ await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
+ release();
+ await expect(page.getByRole('status')).toContainText('Ábrelo desde Proyectos');
+ await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
+});
 test('home never falls back to another project when the requested one is missing',async({page})=>{
  const other={id:'other-p',revision:1,name:'Proyecto existente',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'other',repoRoot:'C:/Salem/other',contextFiles:[],agents:{codex:{provider:'codex',command:['codex']}},supervisor:{roles:roles('codex','codex')},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
  await page.route('**/api/**',async r=>{const u=new URL(r.request().url());

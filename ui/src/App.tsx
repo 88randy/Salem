@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useState,type ReactNode} from 'react';
+import {useCallback,useEffect,useRef,useState,type ReactNode} from 'react';
 import {FolderKanban,ListTodo,Play,Plus,ArrowLeft,RefreshCw,Copy,Archive,Upload,Download,ExternalLink,Square,CheckCircle2,MoreHorizontal} from 'lucide-react';
 import type {Bootstrap,LocalState,ProjectInput,ProjectRecord,TaskInput,TaskRecord,ExecutionRecord,ExecutionDetail,AccountView,LocalSettings,Provider} from '../../src/local/contracts';
 import {api,ApiFailure,setCsrf,download} from './api';
@@ -46,11 +46,15 @@ export function App(){
  const showExecution=(id:string)=>{setExecutionId(id);setPage('Ejecuciones');setEditor(null);setSuccess('');};
  const start=(taskId:string,baseExecutionId?:string)=>run(async()=>{const execution=await api<ExecutionRecord>('/executions',{taskId,requestKey:crypto.randomUUID(),...(baseExecutionId?{baseExecutionId}:{})});await refresh();showExecution(execution.id);});
  const [demoOpen,setDemoOpen]=useState<DemoKind|null>(null);const [draft,setDraft]=useState<{projectId:string;text:string}|null>(null);
+ // Counts navigations so an async completion can tell whether the user moved on meanwhile.
+ const moves=useRef(0);useEffect(()=>{moves.current++;},[page,editor,executionId,conversationId,projectFilter,goalOpenId,evolutionOpenId]);
  const demoCreated=async(result:DemoResult)=>{const kind=demoOpen,created=result.project;setDemoOpen(null);setError(null);
   // Keep the created project even if the refresh below fails, so its goal is never matched to another project.
   if(created&&'config' in created)setView(current=>current?{...current,state:{...current.state,projects:[...current.state.projects.filter(p=>p.id!==created.id),created as ProjectRecord]}}:current);
-  await refresh().catch(fail);
+  const at=moves.current;await refresh().catch(fail);
   if(kind!=='cart'||!result.goal){setSuccess('Demo local creada. El repositorio de prueba ya está disponible en Proyectos y Tareas.');return;}
+  // Never move the user while the refresh ran past a navigation, nor over a pending goal they decline to discard.
+  if(moves.current!==at||!canLeave()){setSuccess(`Ejemplo del carrito creado como «${'name' in created?created.name:'Ejemplo carrito'}». Ábrelo desde Proyectos cuando quieras; tu trabajo actual se conserva.`);return;}
   setDraft({projectId:result.project.id,text:result.goal});setProjectFilter(result.project.id);setEditor(null);setExecutionId(null);setPage('Inicio');setSuccess('Ejemplo del carrito creado. El objetivo sugerido no define la política de envío: Salem te la preguntará en el chat.');};
  const saveProject=async(p:ProjectInput)=>{setError(null);await api('/projects',p);await refresh();setEditor(null);setSuccess('Proyecto guardado.');};
  const saveTask=async(t:TaskInput)=>{setError(null);await api('/tasks',t);await refresh();setEditor(null);setSuccess('Tarea guardada.');};
