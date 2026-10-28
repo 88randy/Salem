@@ -37,7 +37,9 @@ export function App(){
  useEffect(()=>{if(!view)return;const interval=setInterval(()=>{void refresh().catch(fail);},Math.max(500,view.state.settings.refreshIntervalMs));return()=>clearInterval(interval);},[view?.state.settings.refreshIntervalMs,refresh,fail]);
  const run=async(action:()=>Promise<void>,message='')=>{setBusy(true);setError(null);setSuccess('');try{await action();if(message)setSuccess(message);}catch(e){fail(e);}finally{setBusy(false);}};
  // Leaving discards the composer, including a pending example suggestion, so it never resurfaces elsewhere.
- const canLeave=()=>{const ok=!(editor||researchDirty)||window.confirm('Hay un formulario abierto. ¿Descartar sus cambios y salir?');if(ok)setDraft(null);return ok;};
+ // Read through a ref: async completions (such as creating the cart) hold an older canLeave and must see the current form state.
+ const open=useRef({editor,researchDirty});open.current={editor,researchDirty};
+ const canLeave=()=>{const ok=!(open.current.editor||open.current.researchDirty)||window.confirm('Hay un formulario abierto. ¿Descartar sus cambios y salir?');if(ok)setDraft(null);return ok;};
  const nav=(name:Page)=>{if(!canLeave())return;setConversationId(null);history.replaceState(null,'',location.pathname+location.search);setGoalOpenId(null);setEvolutionOpenId(null);setEditor(null);setResearchDirty(false);setExecutionId(null);setPage(name);setError(null);setSuccess('');};
  const incorporateProject=()=>{setEditor({kind:'discover'});setPage('Proyectos');setError(null);setSuccess('');};
  const addProject=()=>{if(!view)return;setEditor({kind:'project',value:newProject(view.state.settings)});setPage('Proyectos');setError(null);setSuccess('');};
