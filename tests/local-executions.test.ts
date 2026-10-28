@@ -176,6 +176,10 @@ test("an accepted execution exports a binary-safe patch that rebuilds its tree o
   await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión/.test(error.message));
   await rm(join(info,"attributes"));await git(ws,"config","--local","core.autocrlf","true");
   await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión/.test(error.message));
+  // The same setting through config.worktree (extensions.worktreeConfig) is refused too.
+  await git(ws,"config","--local","--unset","core.autocrlf");await git(ws,"config","--local","extensions.worktreeConfig","true");await git(ws,"config","--worktree","core.autocrlf","true");
+  await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión/.test(error.message));
+  await git(ws,"config","--worktree","--unset","core.autocrlf");await git(ws,"config","--local","--unset","extensions.worktreeConfig");await git(ws,"config","--local","core.autocrlf","true");
   for(const key of ["core.autocrlf","core.attributesFile","filter.evil.clean","core.fsmonitor"])await git(ws,"config","--local","--unset",key);
   assert.deepEqual((await m.patch(e.id)).data,patch.data);
   await assert.rejects(readFile(marker),{code:"ENOENT"});

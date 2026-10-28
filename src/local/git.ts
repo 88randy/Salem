@@ -58,7 +58,9 @@ const PATCH_ARGS=["--binary","--full-index","--unified=3","--inter-hunk-context=
 export async function localPatch(root:string,sourceSha:string,systemDir:string):Promise<Buffer>{
  // Salem never creates these in a copy; they could convert accepted bytes in ways the acceptance check cannot see.
  const info=resolve(root,await localGit(root,["rev-parse","--git-path","info/attributes"],systemDir));
- const converted=await localGit(root,["config","--local","--name-only","--get-regexp","^core\\.(autocrlf|eol|checkroundtripencoding)$"],systemDir,{allowMissing:true});
+ // --show-scope also reports config.worktree (extensions.worktreeConfig), which --local would miss.
+ const converted=(await localGit(root,["config","--show-scope","--name-only","--get-regexp","^core\\.(autocrlf|eol|checkroundtripencoding)$"],systemDir,{allowMissing:true}))
+  .split(/\r?\n/).some(line=>/^(?:local|worktree)\t/.test(line));
  // An ignored .gitattributes is invisible to the acceptance snapshot but still steers conversion (ident, eol, encoding).
  const hidden=await localGit(root,["ls-files","-z","--others","--ignored","--exclude-standard","--",":(glob)**/.gitattributes"],systemDir);
  if(converted||hidden||await stat(info).then(()=>true,()=>false))throw localError("La copia tiene atributos o reglas de conversión Git añadidos después de aceptar; no se exporta un parche que podría no coincidir con el resultado aceptado.",409);
