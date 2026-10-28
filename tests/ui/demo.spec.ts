@@ -167,6 +167,41 @@ test('a goal typed while the cart refresh is pending is confirmed before the sug
  await expect(composer).toHaveValue('Objetivo sugerido');await expect(page.getByLabel('Proyecto del objetivo')).toHaveValue('cart-p');
  expect(conversations).toEqual([]);
 });
+async function heldCreation(page:Page){
+ const cart={id:'cart-p',revision:1,name:'Ejemplo carrito',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'cart-p',repoRoot:'C:/Salem/cart',contextFiles:[],agents:{codex:{provider:'codex',command:['codex']}},supervisor:{roles:roles('codex','codex')},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
+ let created=false,release:()=>void=()=>{};const held=new Promise<void>(r=>{release=r;}),conversations:any[]=[];
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(['/api/bootstrap','/api/state'].includes(u.pathname))return r.fulfill({json:{csrfToken:'csrf',state:{...state,projects:created?[cart]:[]},accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/projects/demo/plan')return r.fulfill({json:{roles:roles('codex','codex'),selected:'codex',fallback:false,crossProvider:false,estimates:[estimate('codex',['define','build','review'])]}});
+  if(u.pathname==='/api/projects/demo'){await held;created=true;return r.fulfill({json:{project:cart,goal:'Objetivo sugerido'}});}
+  if(u.pathname==='/api/conversations'){conversations.push(r.request().postDataJSON());return r.fulfill({status:500,json:{error:'Sin conversación en la prueba'}});}
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ await page.goto('/');
+ await page.getByRole('button',{name:'Crear ejemplo del carrito',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'Crear ejemplo del carrito'});
+ await dialog.getByRole('button',{name:'Confirmar y crear ejemplo',exact:true}).click();
+ await expect(dialog.getByRole('button',{name:'Confirmar y crear ejemplo',exact:true})).toBeDisabled();
+ return {dialog,release,conversations};
+}
+test('the cart dialog cannot be closed while creation is in flight',async({page})=>{
+ const {dialog,release,conversations}=await heldCreation(page);
+ await page.keyboard.press('Escape');await expect(dialog).toBeVisible();
+ await expect(dialog.getByRole('button',{name:'Cerrar diálogo'})).toBeDisabled();await expect(dialog.getByRole('button',{name:'Cancelar',exact:true})).toBeDisabled();
+ release();await expect(dialog).toHaveCount(0);
+ await expect(page.getByLabel('Proyecto del objetivo')).toHaveValue('cart-p');await expect(page.getByLabel('Qué quieres lograr')).toHaveValue('Objetivo sugerido');
+ expect(conversations).toEqual([]);
+});
+test('navigation forced during cart creation keeps the user where they went with their changes',async({page})=>{
+ const {dialog,release}=await heldCreation(page);
+ // The modal makes the page inert; dispatching the click and input simulates a navigation that slips past it.
+ await page.locator('nav button',{hasText:'Ajustes'}).first().dispatchEvent('click');
+ await expect(page.locator('h1',{hasText:'Ajustes'})).toHaveCount(1);
+ await page.evaluate(()=>{const label=[...document.querySelectorAll('label')].find(l=>l.textContent?.includes('Puerto preferido al reiniciar'))!;const input=(label.querySelector('input')??document.getElementById(label.htmlFor)) as HTMLInputElement;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'4999');input.dispatchEvent(new Event('input',{bubbles:true}));});
+ release();await expect(dialog).toHaveCount(0);
+ await expect(page.getByRole('status')).toContainText('Ábrelo desde Proyectos');
+ await expect(page.getByRole('heading',{name:'Ajustes',exact:true})).toBeVisible();
+ await expect(page.getByLabel('Puerto preferido al reiniciar')).toHaveValue('4999');
+});
 test('home never falls back to another project when the requested one is missing',async({page})=>{
  const other={id:'other-p',revision:1,name:'Proyecto existente',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'other',repoRoot:'C:/Salem/other',contextFiles:[],agents:{codex:{provider:'codex',command:['codex']}},supervisor:{roles:roles('codex','codex')},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
  await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
