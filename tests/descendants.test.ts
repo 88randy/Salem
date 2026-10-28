@@ -120,3 +120,30 @@ test("windows: a missing containment helper fails closed", windows, async () => 
   const dir = await tree(), job = WindowsJob.start(join(dir, "missing-helper.exe"));
   try { await assert.rejects(job.ready, /containment unavailable/); } finally { job.close(); }
 });
+
+// The helper dies right after creating the gate (fault injected at that point).
+// The gate must not survive outside the job, and the guardian must not issue a
+// cleanup receipt it cannot prove: the lease stays open and new work stays blocked.
+test("windows: a helper killed right after creating the gate leaves no gate and no cleanup receipt", windows, async () => {
+  const dir = await tree(), marker = join(dir, "paused.txt");
+  process.env.SALEM_TEST_JOB_HELPER_PAUSE_FILE = marker;
+  let pending: ReturnType<typeof run> | undefined;
+  try {
+    pending = run(dir, "stay");
+    for (let i = 0; i < 300 && !existsSync(marker); i++) await delay(50);
+    const [helper, gate] = (await readFile(marker, "utf8")).split(" ").map(Number) as [number, number];
+    assert.equal(alive(gate), true, "the gate should exist while the helper is paused");
+    process.kill(helper, "SIGKILL");
+    const result = await Promise.race([pending, new Promise<null>(resolve => { setTimeout(resolve, 15000, null).unref(); })]);
+    assert.ok(result, "the guardian hung: a gate outside the job still holds its pipes");
+    for (let i = 0; i < 40 && alive(gate); i++) await delay(50);
+    assert.equal(alive(gate), false, `gate ${gate} survived the helper outside the job`);
+    assert.equal(result.status, "failed", result.error ?? ""); assert.match(result.error ?? "", /cleanup receipt/);
+    assert.equal((await lease(dir)).closed, false, "an unprovable cleanup must not close the lease");
+  } finally {
+    delete process.env.SALEM_TEST_JOB_HELPER_PAUSE_FILE;
+    const gate = Number((await readFile(marker, "utf8").catch(() => "0 0")).split(" ")[1]);
+    if (gate && alive(gate)) process.kill(gate, "SIGKILL"); // releases a hung guardian
+    await pending?.catch(() => {});
+  }
+});

@@ -21,7 +21,7 @@ let stopping = false;
 let finishing = false;
 let timer: NodeJS.Timeout | undefined;
 let killerDone: Promise<void> = Promise.resolve();
-// Windows: an uncontained gate was never created or never received its command, so it has no descendants.
+// Windows: before a launch request no gate exists; from then on only the job can prove the tree is empty.
 const confirmEmpty = async (): Promise<boolean> => !contained || (job ? job.terminate() : false);
 function unconfirmed(): void {
   finishing = true; process.exitCode = 1; clearTimeout(timer);
@@ -68,7 +68,14 @@ async function startContained(message: Start): Promise<void> {
   const gate = job;
   launching = true;
   try { await gate.launch(process.execPath, [fileURLToPath(new URL("./job-gate.js", import.meta.url))], message.cwd); }
-  catch (e) { launching = false; process.stderr.write((e as Error).message); void finish(1); return; }
+  catch (e) {
+    // A failed or unknown launch outcome (e.g. the helper died right after creating
+    // the gate) is settled by the job, never assumed: `cleaned` is sent only if the
+    // live helper confirms the job is empty. Otherwise the receipt is withheld and
+    // new work stays blocked.
+    launching = false; contained = true;
+    process.stderr.write((e as Error).message); void finish(1); return;
+  }
   launching = false; contained = true;
   // Run settles when the gate has exited and every holder of its output pipes is gone.
   const drained = (stream: Readable) => new Promise<void>(resolve => { stream.once("close", resolve); });
