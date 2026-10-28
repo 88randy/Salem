@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runChecks, verifyCheck } from "../src/checks.js";
+import { isDiscoveryOnly, runChecks, verifyCheck } from "../src/checks.js";
 import { checkFixture } from "./check-fixture.js";
 import { repositorySnapshot } from "../src/repository.js";
+import { git } from "./supervisor-fixture.js";
 
 test("checks execute literal argv and persist exit, logs and exact repository proof", async () => {
   const f = await checkFixture();
@@ -117,4 +118,37 @@ test("ambiguous interpreter options require declared tool inputs and then pin th
   await writeFile(script, "console.log('fake success')\n");
   const changed = await runChecks(f.config, f.snapshot.head, { ...f, toolHashes: { test: passed[0]!.toolHash } });
   assert.equal(changed[0]?.execution, "not_run"); assert.equal(changed[0]?.status, "failed");
+});
+
+test("only Django makemigrations --check --dry-run escapes the discovery-only guard", () => {
+  const migrate = ["manage.py", "makemigrations", "--check", "--dry-run"];
+  for (const command of [["python", ...migrate], ["python3", ...migrate], ["python3.12", ...migrate], ["C:\\Py\\python.exe", ...migrate], ["/usr/bin/python3", ...migrate],
+    ["python", "manage.py", "makemigrations", "--dry-run", "--check"], ["python", "manage.py", "makemigrations", "app", "--check", "--dry-run", "--settings=site.settings"]])
+    assert.equal(isDiscoveryOnly(command), false, command.join(" "));
+  for (const command of [["python", "manage.py", "makemigrations", "--dry-run"], ["python", "manage.py", "migrate", "--check", "--dry-run"], ["python", "manage.py", "makemigrations", "--check", "--dry-run", "--help"],
+    ["python", "manage.py", "makemigrations", "--check", "--dry-run", "--version"], ["python", "manage.py", "makemigrations", "--", "--check", "--dry-run"], ["python", "-W", "error", ...migrate],
+    ["python", "-m", "django", "makemigrations", "--check", "--dry-run"], ["python", "sub/manage.py", "makemigrations", "--check", "--dry-run"], ["django-admin", "makemigrations", "--check", "--dry-run"],
+    ["node", ...migrate], ["pythonw", ...migrate], ["python", "--collect-only"], ["pytest", "--collect-only"], ["jest", "--listTests"], ["vitest", "--list-tests"], ["python", "--help"], ["node", "--version"], ["tool", "--dry-run"]])
+    assert.equal(isDiscoveryOnly(command), true, command.join(" "));
+  assert.equal(isDiscoveryOnly(["python", "manage.py", "check"]), false);
+});
+
+test("makemigrations --check --dry-run runs; pending migrations fail without changing the worktree", async () => {
+  const f = await checkFixture(), bin = join(f.dir, "bin"), python = join(bin, process.platform === "win32" ? "python.exe" : "python"), repo = f.config.repoRoot;
+  await mkdir(bin); await link(process.execPath, python).catch(() => copyFile(process.execPath, python)); await chmod(python, 0o755);
+  // A fake manage.py run by a node binary named python: like Django < 4.2, it writes the migration unless --dry-run is given.
+  await writeFile(join(repo, "manage.py"), "const fs=require('fs'),a=process.argv.slice(2);if(a[0]!=='makemigrations')process.exit(2);"
+    + "if(fs.readFileSync('models.txt','utf8')===(fs.existsSync('migrations/0001.txt')?fs.readFileSync('migrations/0001.txt','utf8'):'')){console.log('No changes detected');process.exit(0);}"
+    + "console.log(\"Migrations for 'app':\");if(!a.includes('--dry-run')){fs.mkdirSync('migrations',{recursive:true});fs.writeFileSync('migrations/0001.txt',fs.readFileSync('models.txt'));}process.exit(a.includes('--check')?1:0);\n");
+  await writeFile(join(repo, "models.txt"), "field\n"); await git(repo, "add", "manage.py", "models.txt");
+  await git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "pending model change");
+  f.config.checks = [{ id: "django-migrations", required: true, command: [python, "manage.py", "makemigrations", "--check", "--dry-run"] }];
+  const pending = await repositorySnapshot(repo), failed = await runChecks(f.config, pending.head, { ...f, snapshot: pending });
+  assert.deepEqual([failed[0]?.status, failed[0]?.execution, failed[0]?.exitCode, failed[0]?.failureKind], ["failed", "actual", 1, "code"]);
+  assert.match(await readFile(join(failed[0]!.artifactDir, "stdout.log"), "utf8"), /Migrations for 'app'/);
+  assert.deepEqual(await repositorySnapshot(repo), pending); assert.ok(!(await readdir(repo)).includes("migrations"));
+  await mkdir(join(repo, "migrations")); await writeFile(join(repo, "migrations", "0001.txt"), "field\n"); await git(repo, "add", "migrations");
+  await git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "add migration");
+  const clean = await repositorySnapshot(repo), passed = await runChecks(f.config, clean.head, { ...f, snapshot: clean });
+  assert.deepEqual([passed[0]?.status, passed[0]?.execution, passed[0]?.exitCode, passed[0]?.failureKind], ["passed", "actual", 0, null]);
 });

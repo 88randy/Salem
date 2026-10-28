@@ -2,7 +2,7 @@ import type { ProjectConfig, RepositorySnapshot, CheckEvidence } from "./contrac
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, writeFile, readFile, realpath, lstat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { digest, atomicJson } from "./state-store.js";
 import { repositorySnapshot, repositoryFiles, assertStateLocation } from "./repository.js";
 import { checkInputs } from "./check-inputs.js";
@@ -51,6 +51,18 @@ export async function verifyCheck(evidence: CheckEvidence, root: string): Promis
       && evidence.stdoutHash === await fileHash(join(actual, "stdout.log")) && evidence.stderrHash === await fileHash(join(actual, "stderr.log"));
   } catch { return false; }
 }
+const DISCOVERY_FLAGS = ["--dry-run", "--collect-only", "--listTests", "--list-tests", "--help", "--version"];
+// Acceptance-policy guard: listing/simulating commands cannot produce passing evidence.
+// The one exception is Django's `python manage.py makemigrations ... --check ... --dry-run`,
+// which verifies (non-zero on missing migrations) and writes nothing. Interpreter flags,
+// other manage.py paths, `--`, `python -m django` and `django-admin` stay discovery-only.
+export function isDiscoveryOnly(command: readonly string[]): boolean {
+  if (!command.some(arg => DISCOVERY_FLAGS.includes(arg))) return false;
+  const program = basename(command[0] ?? "").replace(/\.exe$/i, "").toLowerCase(), rest = command.slice(3);
+  const migrationsCheck = /^python(?:\d+(?:\.\d+)*)?$/.test(program) && command[1] === "manage.py" && command[2] === "makemigrations"
+    && rest.includes("--check") && rest.includes("--dry-run") && !rest.some(arg => arg === "--" || (arg !== "--dry-run" && DISCOVERY_FLAGS.includes(arg)));
+  return !migrationsCheck;
+}
 export async function runChecks(config: ProjectConfig, sha: string, options: CheckOptions = {}): Promise<CheckEvidence[]> {
   const snapshot = options.snapshot ?? await repositorySnapshot(config.repoRoot);
   if (snapshot.head !== sha || digest(await repositorySnapshot(config.repoRoot)) !== digest(snapshot)) throw new Error("Check SHA/worktree differs from expected version");
@@ -74,7 +86,7 @@ export async function runChecks(config: ProjectConfig, sha: string, options: Che
     let status: CheckEvidence["status"] = "failed", execution: CheckEvidence["execution"] = "not_run", exitCode: number | null = null, reason: string | null = null;
     let failureKind: CheckEvidence["failureKind"] = "policy";
     if (check.notApplicableReason) { status = "not_applicable"; reason = check.notApplicableReason; }
-    else if (check.mode === "dry_run" || check.command.some(arg => ["--dry-run", "--collect-only", "--listTests", "--list-tests", "--help", "--version"].includes(arg))) {
+    else if (check.mode === "dry_run" || isDiscoveryOnly(check.command)) {
       execution = "dry_run"; reason = "Dry-run/discovery command cannot verify code";
     } else if (options.signal?.aborted) reason = "Check cancelled before launch";
     else if (toolHash === "unavailable") reason = "Check tool inputs unavailable or ambiguous; declare toolFiles";
