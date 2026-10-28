@@ -48,14 +48,15 @@ test('demo execution exposes immutable task, real evidence and paginated logs; a
  await page.route('**/api/**',async r=>{const u=new URL(r.request().url());const method=r.request().method();if(method!=='GET')expect(r.request().headers()['x-salem-csrf']).toBe('csrf');
  if(u.pathname==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state:state(),accounts:[account()],dataDir:'C:/Salem'}});
  if(u.pathname==='/api/state')return r.fulfill({json:{state:state(),accounts:[account()],dataDir:'C:/Salem'}});
- if(u.pathname==='/api/projects/demo'){demo=true;return r.fulfill({json:{project,task}});}
+ if(u.pathname==='/api/projects/demo/plan')return r.fulfill({json:{roles:{define:'codex',build:'codex',review:'codex'},selected:'codex',fallback:false,crossProvider:false,estimates:[{provider:'codex',stages:['define','build','review'],model:null,effort:null,reference:null,matchesReference:false}]}});
+ if(u.pathname==='/api/projects/demo'){expect(r.request().postDataJSON()).toEqual({provider:'codex',roles:{define:'codex',build:'codex',review:'codex'}});demo=true;return r.fulfill({json:{project,task}});}
  if(u.pathname==='/api/executions'){started=true;starts++;return r.fulfill({json:{...execution,id:starts===1?'e':'e2'}});}
  if(u.pathname==='/api/executions/e2')return r.fulfill({json:{execution:{...execution,id:'e2'},metrics:null,diff:'',run:null,artifacts:[{path:'logs/build.txt',bytes:9}]}});
  if(u.pathname==='/api/executions/e')return r.fulfill({json:{execution,metrics:null,diff:'+ return a + b;',artifacts:[{path:'logs/build.txt',bytes:9}],run:{id:'run-1',status:'completed',attempts:[],history:[{at:2,status:'completed',reason:'Aceptada'}],checks:[{checkId:'tests',status:'passed',execution:'actual',durationMs:30,exitCode:0,reason:null}],acceptance:{accepted:true,reasons:[],checkIds:['tests']},validation:null,delivery:null,deliveryJournal:null}}});
  if(u.pathname.endsWith('/artifact')){logReads++;return r.fulfill({json:{text:logReads===1?'parte uno':'parte dos',truncated:logReads===1,nextOffset:logReads===1?9:null}});}
  if(u.pathname==='/api/accounts/codex/check'){connected=true;return r.fulfill({json:account()});}
  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
- await page.goto('/');await page.getByRole('button',{name:'Crear demo local',exact:true}).click();
+ await page.goto('/');await page.getByRole('button',{name:'Crear demo local',exact:true}).click();await page.getByRole('button',{name:'Confirmar y crear demo',exact:true}).click();await expect(page.getByRole('status')).toContainText('Demo local creada');
  await page.getByRole('button',{name:'Tareas',exact:true}).click();await page.getByRole('button',{name:'Ejecutar DEMO-1',exact:true}).click();
  await expect(page.getByRole('heading',{name:'DEMO-1',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Checks',exact:true}).click();await expect(page.getByRole('heading',{name:'tests Aprobado',exact:true})).toBeVisible();

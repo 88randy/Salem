@@ -125,6 +125,12 @@ una ejecución anterior.
 Para conocer el flujo sin usar un repositorio de producto, **Crear demo local**
 prepara un repositorio y una tarea controlados dentro del directorio de datos.
 Crear la demo no inicia por sí solo una invocación de agente.
+Antes de crearla, Salem comprueba las cuentas listas y muestra un aviso de consumo
+que debes confirmar. Con Claude y Codex conectados, un proveedor define e implementa
+y el otro revisa, por lo que se usan ambas cuotas; con uno solo, ese proveedor hace
+todos los pasos. El aviso muestra rangos de tokens y duración solo si existe una
+medición de referencia; si no existe, indica que el consumo es desconocido. Sin
+proveedores listos no se crea nada y el aviso remite a **Cuentas**.
 
 ## Ejecuciones y aislamiento
 

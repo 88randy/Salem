@@ -1,11 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { defaultAgent } from "./contracts.js";
+import { defaultAgent, type AccountView, type LocalSettings, type Provider } from "./contracts.js";
 import type { LocalStore } from "./store.js";
 import { localGit } from "./git.js";
+import { localError } from "./validation.js";
+import { demoEstimate, type DemoEstimateReference, type DemoPlan, type DemoRoles, type DemoStage } from "./demo-estimate.js";
 
-export async function createLocalDemo(store:LocalStore){
+const stages:DemoStage[]=["define","build","review"];
+const ready=(accounts:AccountView[],provider:Provider)=>accounts.some(a=>a.provider===provider&&a.installed&&a.compatible&&a.authenticated===true);
+export const sameRoles=(a:DemoRoles,b:unknown)=>!!b&&typeof b==="object"&&!Array.isArray(b)&&Object.keys(b).length===stages.length&&stages.every(s=>(b as Record<string,unknown>)[s]===a[s]);
+
+export function planLocalDemo(accounts:AccountView[],settings:LocalSettings,selected:Provider="codex",reference:DemoEstimateReference=demoEstimate):DemoPlan{
+ const other:Provider=selected==="codex"?"claude":"codex",mine=ready(accounts,selected),theirs=ready(accounts,other);
+ if(!mine&&!theirs)throw localError("Ningún proveedor está listo para la demo. Conecta Claude o Codex en Cuentas y vuelve a intentarlo.",412);
+ const build=mine?selected:other,roles:DemoRoles={define:build,build,review:mine&&theirs?other:build};
+ const scenario=reference.scenarios.find(s=>sameRoles(roles,s.roles));
+ const estimates=[...new Set(stages.map(s=>roles[s]))].map(provider=>{
+  const agent=defaultAgent(provider,settings),measured=scenario?.providers[provider],model=agent.model??null,effort=agent.effort??null;
+  return {provider,stages:stages.filter(s=>roles[s]===provider),model,effort,reference:measured&&scenario?{...measured,measuredAt:scenario.measuredAt,salemVersion:scenario.salemVersion}:null,matchesReference:!!measured&&measured.model===model&&measured.effort===effort};
+ });
+ return {roles,selected,fallback:!mine,crossProvider:roles.build!==roles.review,estimates};
+}
+
+export async function createLocalDemo(store:LocalStore,roles:DemoRoles={define:"codex",build:"codex",review:"codex"}){
  const id=randomUUID(),root=join(store.root,"demos",id),settings=(await store.readState()).settings;
  await mkdir(root,{recursive:true});
  await writeFile(join(root,"AGENTS.md"),"# Demo Salem\nSolo modifica sum.mjs para cumplir la tarea. No cambies el verificador ni estas instrucciones. No ejecutes acciones Git o remotas.\nCONTEXTO-SALEM-DEMO\n");
@@ -18,7 +36,7 @@ export async function createLocalDemo(store:LocalStore){
  const project=await store.saveProject({name:"Demo Salem",baseRef:"HEAD",preparation:[],config:{schemaVersion:1,projectId:`demo-${id.slice(0,8)}`,repoRoot:root,contextFiles:["AGENTS.md"],
   agents:{codex:defaultAgent("codex",settings),claude:defaultAgent("claude",settings)},checks:[{id:"sum",command:[process.execPath,".salem-check.mjs"],required:true}],
   capabilities:{edit:true,commit:true,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:180000,maxOutputBytes:2_000_000},
-  supervisor:{roles:{define:"codex",build:"codex",review:"codex"},runTimeoutMs:600000,maxAttempts:6,maxReportedTokens:500000},
+  supervisor:{roles:{...roles},runTimeoutMs:600000,maxAttempts:6,maxReportedTokens:500000},
   delivery:{branchPrefix:"feature/salem-",recovery:"query_only",commit:{message:"fix: suma del demo",author:{name:"Salem Demo",email:"demo@example.invalid"}}}}});
  const criterion="sum(a,b) devuelve la suma de ambos argumentos";
  const task=await store.saveTask({projectId:project.id,spec:{id:"BUG-SUM",objective:"Corrige sum.mjs para que sum(a,b) devuelva la suma de ambos argumentos. Conserva el verificador y las instrucciones.",scope:["sum.mjs"],acceptance:[criterion],references:["AGENTS.md"],acceptanceChecks:{[criterion]:["sum"]}}});
