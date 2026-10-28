@@ -45,7 +45,10 @@ export function App(){
  const showExecution=(id:string)=>{setExecutionId(id);setPage('Ejecuciones');setEditor(null);setSuccess('');};
  const start=(taskId:string,baseExecutionId?:string)=>run(async()=>{const execution=await api<ExecutionRecord>('/executions',{taskId,requestKey:crypto.randomUUID(),...(baseExecutionId?{baseExecutionId}:{})});await refresh();showExecution(execution.id);});
  const [demoOpen,setDemoOpen]=useState<DemoKind|null>(null);const [draft,setDraft]=useState('');
- const demoCreated=async(result:DemoResult)=>{const kind=demoOpen;setDemoOpen(null);setError(null);await refresh().catch(fail);
+ const demoCreated=async(result:DemoResult)=>{const kind=demoOpen,created=result.project;setDemoOpen(null);setError(null);
+  // Keep the created project even if the refresh below fails, so its goal is never matched to another project.
+  if(created&&'config' in created)setView(current=>current?{...current,state:{...current.state,projects:[...current.state.projects.filter(p=>p.id!==created.id),created as ProjectRecord]}}:current);
+  await refresh().catch(fail);
   if(kind!=='cart'||!result.goal){setSuccess('Demo local creada. El repositorio de prueba ya está disponible en Proyectos y Tareas.');return;}
   setDraft(result.goal);setProjectFilter(result.project.id);setEditor(null);setExecutionId(null);setPage('Inicio');setSuccess('Ejemplo del carrito creado. El objetivo sugerido no define la política de envío: Salem te la preguntará en el chat.');};
  const saveProject=async(p:ProjectInput)=>{setError(null);await api('/projects',p);await refresh();setEditor(null);setSuccess('Proyecto guardado.');};

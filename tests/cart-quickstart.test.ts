@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {copyFile,mkdtemp,readFile,readdir,rm} from 'node:fs/promises';
+import {copyFile,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {LocalStore} from '../src/local/store.js';
@@ -25,6 +25,8 @@ test('cart fixture checks fail on the initial commit and pass on the reference s
   assert.equal(goal,cartGoal);assert.doesNotMatch(goal,/\$|gratis|999|umbral/i);
   assert.deepEqual(project.config.supervisor!.roles,{define:'claude',build:'claude',review:'codex'});
   assert.deepEqual(project.config.checks.map(c=>[c.id,c.required]),[['api',true],['subtotal',false],['shipping',false],['total',false]]);
+  // All four are final checks: the last task of any generated plan must pass them, whatever its own mapping.
+  assert.ok(project.config.checks.every(c=>c.final===true));
   // The repository is exactly the versioned fixture, committed once with LF endings.
   const fixture=resolve('fixtures/cart-quickstart'),files=(await readdir(fixture,{recursive:true,withFileTypes:true})).filter(e=>e.isFile()).map(e=>join(e.parentPath,e.name).slice(fixture.length+1).replaceAll('\\','/')).sort();
   assert.deepEqual((await localGit(repo,['ls-files'],root)).split('\n').sort(),files);
@@ -33,6 +35,10 @@ test('cart fixture checks fail on the initial commit and pass on the reference s
   assert.deepEqual(run(project.config,repo),{api:0,subtotal:1,shipping:1,total:1});
   await copyFile(reference,join(repo,'cart.mjs'));
   assert.deepEqual(run(project.config,repo),{api:0,subtotal:0,shipping:0,total:0});
+  // A total that only looks at the first item must not pass: the checks combine several items.
+  const solution=(await readFile(reference,'utf8')).replaceAll('\r\n','\n'),firstItem=solution.replace(/^export function total\(.*$/m,'export function total(items){const amount=subtotal(items.slice(0,1));return amount+shipping(amount);}');
+  assert.notEqual(firstItem,solution);await writeFile(join(repo,'cart.mjs'),firstItem);
+  assert.deepEqual(run(project.config,repo),{api:0,subtotal:0,shipping:0,total:1});
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -48,10 +54,10 @@ test('creating the cart example twice keeps two independent projects',async()=>{
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
-async function conversation(maxAttempts?:number){
+async function conversation(maxAttempts?:number,extra:string[]=[]){
  const root=await mkdtemp(join(tmpdir(),'salem cart chat ')),store=new LocalStore(join(root,'data')),{project,goal}=await createLocalCart(store);
  const config=structuredClone(project.config);config.capabilities.commit=false;delete config.delivery;if(maxAttempts)config.supervisor!.maxAttempts=maxAttempts;
- for(const [id,agent] of Object.entries(config.agents))agent.command=[process.execPath,resolve('tests/fixtures/cart-agent.mjs'),id];
+ for(const [id,agent] of Object.entries(config.agents))agent.command=[process.execPath,resolve('tests/fixtures/cart-agent.mjs'),id,...extra];
  const p=await store.saveProject({...project,config});
  const executions=new ExecutionManager(store),goals=new GoalManager(store,{acceptedBase:id=>executions.acceptedBase(id),additionalActive:()=>executions.activeCount()}),chat=new ConversationManager(store,goals,executions);
  await executions.initialize();await goals.initialize();await chat.initialize();
@@ -89,5 +95,21 @@ test('an answer that contradicts the fixture checks stops at shipping and keeps 
   assert.equal((await f.executions.detail(subtotal)).run?.acceptance?.accepted,true);
   const shipping=await f.executions.detail(stopped.steps[1]!.executionId!);assert.notEqual(shipping.run?.acceptance?.accepted,true);
   assert.ok((shipping.run!.checks??[]).some(c=>c.checkId==='shipping'&&c.status==='failed'));
+ }finally{await f.close();}
+});
+
+test('a plan that maps every criterion to api still needs the functional checks to finish',async()=>{
+ const f=await conversation(3,['--fixture-api-only']);
+ try{
+  await f.chat.command(f.question.id,'message',{revision:f.question.revision,requestKey:'policy',text:policy});
+  const stopped=await until(async()=>{const c=await f.store.findConversation(f.question.id);if(c.status==='completed')throw Error('completed with a failing functional check');return c.status==='blocked'?c:undefined;});
+  // Intermediate steps keep partial acceptance; only the final task is held to every final check.
+  assert.deepEqual(stopped.steps.map(s=>[s.planTask.id,s.planTask.checkIds,s.status]),[['subtotal',['api'],'accepted'],['shipping',['api'],'accepted'],['total',['api'],'blocked']]);
+  const state=await f.store.readState(),last=state.tasks.find(t=>t.id===stopped.steps[2]!.taskId)!,first=state.tasks.find(t=>t.id===stopped.steps[0]!.taskId)!;
+  for(const ids of Object.values(last.spec.acceptanceChecks!))assert.deepEqual([...ids].sort(),['api','shipping','subtotal','total']);
+  for(const ids of Object.values(first.spec.acceptanceChecks!))assert.deepEqual(ids,['api']);
+  const total=await f.executions.detail(stopped.steps[2]!.executionId!);assert.notEqual(total.run?.acceptance?.accepted,true);
+  assert.ok((total.run!.checks??[]).some(c=>c.checkId==='total'&&c.status==='failed'));
+  assert.equal(stopped.lastAcceptedExecutionId,stopped.steps[1]!.executionId);
  }finally{await f.close();}
 });

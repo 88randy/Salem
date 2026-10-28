@@ -29,6 +29,12 @@ test("loads portable profile with spaces without Linear and resolves context", a
   assert.deepEqual(c.agents.worker?.command, [process.execPath, "--version"]);
   assert.equal(c.capabilities.merge, false);
 });
+test("final checks are an optional boolean and only true is kept", async () => {
+  const f = await fixture(), check = f.config.checks[0] as Record<string, unknown>;
+  check.final = true; await f.save(); assert.equal((await loadProjectConfig(f.file)).checks[0]!.final, true);
+  check.final = false; await f.save(); assert.equal("final" in (await loadProjectConfig(f.file)).checks[0]!, false);
+  check.final = "yes"; await f.save(); await assert.rejects(loadProjectConfig(f.file), /final/);
+});
 test("rejects unresolved repo_root, missing context, and traversal", async () => {
   const f = await fixture();
   f.config.repoRoot = "repo_root"; await f.save();

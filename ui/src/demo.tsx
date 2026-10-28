@@ -1,10 +1,10 @@
 import {useEffect,useState} from 'react';
-import type {Provider} from '../../src/local/contracts';
+import type {ProjectRecord,Provider} from '../../src/local/contracts';
 import type {DemoKind,DemoPlan,DemoProviderEstimate} from '../../src/local/demo-estimate';
 import {api} from './api';
 import {Modal,Select} from './fields';
 
-export interface DemoResult {project:{id:string};goal?:string}
+export interface DemoResult {project:{id:string}|ProjectRecord;goal?:string}
 const name=(p:Provider)=>p==='claude'?'Claude':'Codex';
 const stageNames={define:'define',build:'implementa',review:'revisa'} as const;
 const copy={sum:{title:'Crear demo local',noun:'La demo',what:'esta demo',confirm:'Confirmar y crear demo',failed:'No se pudo crear la demo.',prepare:'No se pudo preparar la demo.'},

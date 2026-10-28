@@ -63,8 +63,9 @@ export async function createLocalCart(store:LocalStore,roles:DemoRoles={define:"
  const taken=new Set((await store.readState()).projects.map(p=>p.name));let name="Ejemplo carrito";for(let n=2;taken.has(name);n++)name=`Ejemplo carrito ${n}`;
  const project=await store.saveProject({name,baseRef:"HEAD",preparation:[],config:{schemaVersion:1,projectId:`cart-${id.slice(0,8)}`,repoRoot:root,contextFiles:["AGENTS.md"],
   agents:{codex:defaultAgent("codex",settings),claude:defaultAgent("claude",settings)},
-  // Only the API check is required: intermediate steps cannot pass the checks of later steps yet.
-  checks:cartChecks.map(c=>({id:c,command:[process.execPath,`checks/${c}.mjs`],required:c==="api"})),
+  // Only the API check is required in every step: intermediate steps cannot pass the checks of later steps yet.
+  // All four are final, so the last task of any generated plan needs them regardless of its own criteria mapping.
+  checks:cartChecks.map(c=>({id:c,command:[process.execPath,`checks/${c}.mjs`],required:c==="api",final:true})),
   capabilities:{edit:true,commit:true,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:180000,maxOutputBytes:2_000_000},
   supervisor:{roles:{...roles},runTimeoutMs:600000,maxAttempts:6,maxReportedTokens:500000},
   delivery:{branchPrefix:"feature/salem-",recovery:"query_only",commit:{message:"feat: carrito del ejemplo",author:{name:"Salem Demo",email:"demo@example.invalid"}}}}});

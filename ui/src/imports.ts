@@ -7,7 +7,7 @@ export function profileShape(v:unknown):v is ProjectConfig{
  if(!object(v)||v.schemaVersion!==1||typeof v.projectId!=='string'||typeof v.repoRoot!=='string'||!strings(v.contextFiles)||!object(v.agents)||!Array.isArray(v.checks)||!object(v.capabilities)||!object(v.budgets))return false;
  if(v.instructions!==undefined&&typeof v.instructions!=='string')return false;
  if(!Object.values(v.agents).every(a=>object(a)&&['codex','claude'].includes(String(a.provider))&&strings(a.command)&&(a.model===undefined||typeof a.model==='string')&&(a.effort===undefined||typeof a.effort==='string')))return false;
- if(!v.checks.every(c=>object(c)&&typeof c.id==='string'&&strings(c.command)&&typeof c.required==='boolean'&&optionalStrings(c.toolFiles)))return false;
+ if(!v.checks.every(c=>object(c)&&typeof c.id==='string'&&strings(c.command)&&typeof c.required==='boolean'&&(c.final===undefined||typeof c.final==='boolean')&&optionalStrings(c.toolFiles)))return false;
  if(!['edit','commit','pull_request','merge','deploy'].every(k=>typeof (v.capabilities as Record<string,unknown>)[k]==='boolean'))return false;
  if(typeof v.budgets.stageTimeoutMs!=='number'||typeof v.budgets.maxOutputBytes!=='number')return false;
  if(v.supervisor!==undefined&&(!object(v.supervisor)||!object(v.supervisor.roles)||!['define','build','review'].every(k=>typeof (v.supervisor as {roles:Record<string,unknown>}).roles[k]==='string')||typeof v.supervisor.runTimeoutMs!=='number'||typeof v.supervisor.maxAttempts!=='number'))return false;

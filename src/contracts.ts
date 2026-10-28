@@ -1,7 +1,8 @@
 export type Stage = "define" | "build" | "review";
 export type Capability = "edit" | "commit" | "pull_request" | "merge" | "deploy";
 export interface AgentConfig { provider: "codex" | "claude"; command: string[]; ignoreUserConfig?: boolean; model?: string; effort?: string }
-export interface CheckConfig { id: string; command: string[]; required: boolean; mode?: "execute" | "dry_run"; notApplicableReason?: string; toolFiles?: string[] }
+/** `final` checks must pass in the last task of a generated plan, whatever criteria mapping the plan proposes. */
+export interface CheckConfig { id: string; command: string[]; required: boolean; final?: boolean; mode?: "execute" | "dry_run"; notApplicableReason?: string; toolFiles?: string[] }
 export interface ProjectConfig {
   schemaVersion: 1;
   projectId: string;
