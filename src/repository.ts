@@ -20,7 +20,8 @@ async function git(root: string, ...args: string[]): Promise<string> {
 export async function repositoryFiles(root: string): Promise<string[]> {
   return (await git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")).split("\0").filter(Boolean);
 }
-export async function repositorySnapshot(root: string): Promise<RepositorySnapshot> {
+/** readOnly keeps status from persisting its opportunistic index stat refresh (for exports that must not touch the index). */
+export async function repositorySnapshot(root: string, options: { readOnly?: boolean } = {}): Promise<RepositorySnapshot> {
   root = await realpath(root);
   const fields = (await git(root, "rev-parse", "--show-toplevel", "--absolute-git-dir", "HEAD")).trim().split(/\r?\n/);
   // Line-delimited metadata is unambiguous for ordinary paths. Preserve the
@@ -30,7 +31,7 @@ export async function repositorySnapshot(root: string): Promise<RepositorySnapsh
   if (root !== top) throw new Error("repoRoot must be the root of an isolated Git worktree");
   const head = metadata?.[2] ?? (await git(root, "rev-parse", "HEAD")).trim();
   const gitDir = await realpath(metadata?.[1] ?? (await git(root, "rev-parse", "--absolute-git-dir")).trim());
-  const status = await git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all");
+  const status = await git(root, ...(options.readOnly ? ["--no-optional-locks"] : []), "status", "--porcelain=v1", "-z", "--untracked-files=all");
   const paths = await repositoryFiles(root);
   const staged = (await git(root, "ls-files", "--stage", "-z")).split("\0");
   if (staged.some(entry => entry.startsWith("160000 "))) throw new Error("Submodules require a project adapter");

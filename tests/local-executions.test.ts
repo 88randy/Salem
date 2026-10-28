@@ -1,7 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {randomBytes,randomUUID} from "node:crypto";
-import {mkdtemp,readFile,writeFile,mkdir,symlink,rm,readdir,copyFile,chmod} from "node:fs/promises";
+import {mkdtemp,readFile,writeFile,mkdir,symlink,rm,readdir,copyFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join,resolve} from "node:path";
 import {LocalStore} from "../src/local/store.js";
@@ -118,28 +118,48 @@ async function workTree(root:string):Promise<string>{
  try{await copyFile(join(root,".git","index"),index);for(const args of [["add","--all"],["write-tree"]]){const r=await runProcess({command:["git",...args],cwd:root,env:{GIT_INDEX_FILE:index},timeoutMs:30000,maxOutputBytes:200000});if(r.status!=="exited"||r.exitCode!==0)throw Error(r.stderr);if(args[0]==="write-tree")return r.stdout.trim();}throw Error("unreachable");}
  finally{await rm(dir,{recursive:true,force:true});}
 }
+async function withEnv<T>(env:Record<string,string>,fn:()=>Promise<T>):Promise<T>{
+ const saved=Object.fromEntries(Object.keys(env).map(key=>[key,process.env[key]]));Object.assign(process.env,env);
+ try{return await fn();}finally{for(const [key,value] of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+}
+// User diff settings that would break or reshape a patch if they leaked into the export.
+const hostileDiff={GIT_DIFF_OPTS:"--unified=0",GIT_CONFIG_COUNT:"3",GIT_CONFIG_KEY_0:"diff.context",GIT_CONFIG_VALUE_0:"0",GIT_CONFIG_KEY_1:"diff.noprefix",GIT_CONFIG_VALUE_1:"true",GIT_CONFIG_KEY_2:"diff.mnemonicPrefix",GIT_CONFIG_VALUE_2:"true"};
 test("an accepted execution exports a binary-safe patch that rebuilds its tree on a fresh clone of sourceSha",async()=>{
- const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await f.store.saveProject({...project,config});const m=new Manager(f.store);await m.initialize();
+ const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await f.store.saveProject({...project,config});
+ // The fixture agent makes binary, new-directory, deletion, mode and mid-file changes before acceptance.
+ const repo=project.config.repoRoot;await writeFile(join(repo,"patch-fixture.txt"),"remove me\n");await writeFile(join(repo,"context.txt"),Array.from({length:9},(_,i)=>`line ${i+1}\n`).join(""));
+ await git(repo,"add","patch-fixture.txt","context.txt");await git(repo,"-c","user.name=Test","-c","user.email=test@example.invalid","commit","-q","-m","patch fixture");
+ const m=new Manager(f.store);await m.initialize();
  try{
   assert.equal(typeof m.patch,"function","patch export missing");
   const e=await m.start(task.id,"patch");const done=await until(async()=>{const r=await f.store.findExecution(e.id);return ["completed","failed","blocked"].includes(r.status)?r:undefined;});assert.equal(done.status,"completed",done.reason??"");
   const ws=done.workspace!,bytes=Buffer.from(Array.from({length:256},(_,i)=>i).filter(i=>i!==13));
-  await mkdir(join(ws,"new dir","deep"),{recursive:true});await writeFile(join(ws,"new dir","deep","asset.bin"),bytes);await writeFile(join(ws,"new dir","notes.txt"),"nested\n");
-  await rm(join(ws,"AGENTS.md"));await writeFile(join(ws,"staged.txt"),"staged addition\n");await git(ws,"add","staged.txt");
-  await chmod(join(ws,"sum.mjs"),0o755);await git(ws,"update-index","--chmod=+x","sum.mjs");
   const status=await git(ws,"status","--porcelain=v1","--untracked-files=all"),index=await readFile(join(ws,".git","index"));
-  const patch=await m.patch(e.id);
+  const patch=await withEnv(hostileDiff,()=>m.patch(e.id));
   assert.deepEqual(await readFile(join(ws,".git","index")),index);assert.equal(await git(ws,"status","--porcelain=v1","--untracked-files=all"),status);
   assert.ok(Buffer.isBuffer(patch.data));assert.match(patch.name,/^salem-[a-f0-9]{8}\.patch$/);
   const text=patch.data.toString("latin1");assert.match(text,/GIT binary patch/);assert.match(text,/deleted file mode/);assert.match(text,/new mode 100755/);assert.match(text,/return a\+b/);assert.match(text,/^index [a-f0-9]{40}\.\.[a-f0-9]{40}/m);
-  const clone=join(f.root,"fresh clone"),file=join(f.root,"accepted.patch");await git(f.root,"clone","--quiet","--no-checkout",project.config.repoRoot,clone);await git(clone,"checkout","--quiet","--detach",done.sourceSha!);await writeFile(file,patch.data);
-  await git(clone,"apply","--index",file);
+  assert.match(text,/^diff --git a\/context\.txt b\/context\.txt$/m);assert.match(text,/^@@ -2,7 \+2,7 @@/m);
+  const clone=join(f.root,"fresh clone"),file=join(f.root,"accepted.patch");await git(f.root,"clone","--quiet","--no-checkout",repo,clone);await git(clone,"checkout","--quiet","--detach",done.sourceSha!);await writeFile(file,patch.data);
+  await git(clone,"apply","--3way","--check",file);await git(clone,"apply","--3way",file);
   assert.equal(await git(clone,"write-tree"),await workTree(ws));assert.deepEqual(await readFile(join(clone,"new dir","deep","asset.bin")),bytes);
   assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch)-/.test(name)),false);
-  await writeFile(join(ws,"large.bin"),randomBytes(1_700_000));await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===413&&/límite/.test(error.message));
+  // Edits after acceptance were never reviewed: the export refuses them, and works again once reverted.
+  await writeFile(join(ws,"unreviewed.txt"),"after acceptance\n");await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/ya no coincide con el resultado aceptado/.test(error.message));
+  await rm(join(ws,"unreviewed.txt"));await writeFile(join(ws,"context.txt"),"rewritten\n");await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409);
+  await writeFile(join(ws,"context.txt"),(await readFile(join(clone,"context.txt"),"utf8")));assert.deepEqual((await m.patch(e.id)).data,patch.data);
   assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch)-/.test(name)),false);
   await rm(ws,{recursive:true,force:true});await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===410);
  }finally{await m.shutdown();}
+});
+test("patch generation rejects output over the Git limit and leaves no temporary files",async()=>{
+ const f=await diffFixture();
+ try{
+  const {localPatch}=await import("../src/local/git.js");
+  await writeFile(join(f.workspace,"large.bin"),randomBytes(1_700_000));
+  await assert.rejects(localPatch(f.workspace,await git(f.workspace,"rev-parse","HEAD"),f.store.root),(error:Error&{status?:number})=>error.status===413&&/límite/.test(error.message));
+  assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch)-/.test(name)),false);
+ }finally{await f.m.shutdown();}
 });
 test("patch export rejects unknown and not accepted executions",async()=>{
  const f=await diffFixture();

@@ -24,8 +24,8 @@ export interface RunnerOptions {
   gates?: { validate?: (state: RunState, signal: AbortSignal) => Promise<GateReceipt>; deliver?: (state: RunState, signal: AbortSignal) => Promise<GateReceipt> };
 }
 /** A dirty baseline is admitted only as the exact, independently accepted predecessor. */
-export async function verifyAcceptedBase(base:NonNullable<RunnerOptions['acceptedBase']>,root:string):Promise<void>{
- const state=base.state,current=await repositorySnapshot(state.expected.root),target=await repositorySnapshot(root);
+export async function verifyAcceptedBase(base:NonNullable<RunnerOptions['acceptedBase']>,root:string,options:{readOnly?:boolean}={}):Promise<void>{
+ const state=base.state,current=await repositorySnapshot(state.expected.root,options),target=await repositorySnapshot(root,options);
  if(state.status!=='completed'||digest(current)!==digest(state.expected)||current.head!==target.head||current.treeHash!==target.treeHash||current.dirty!==target.dirty||state.configHash!==digest(base.config)||state.instructionsHash!==await instructionsHash(base.config)||state.delivery?.verdict!=='success'||state.delivery.fingerprint!==runFingerprint(state))throw new Error('La base aceptada cambió o no tiene una entrega verificable.');
  const review=[...state.attempts].reverse().find(a=>a.stage==='review'&&a.valid)?.result;
  const implementationSessionId=[...state.attempts].reverse().find(a=>a.stage==='build'&&a.valid)?.result?.sessionId??null;
