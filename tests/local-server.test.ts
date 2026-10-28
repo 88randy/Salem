@@ -127,7 +127,8 @@ test("static paths reject traversal and symlink escape while picker returns dire
 test("execution routes validate UUIDs and delegate only the requested operation", async () => {
   const s = await fixture();
   try {
-    const id = randomUUID(), taskId = randomUUID();
+    // The fake manager treats ids starting with "0" as not accepted; keep the accepted id outside that prefix.
+    const id = `a${randomUUID().slice(1)}`, taskId = randomUUID();
     const start = await fetch(`${s.server.url}/api/executions`, { method: "POST", headers: s.headers, body: JSON.stringify({ taskId, requestKey: "fixture-key" }) });
     assert.equal(start.status, 200); assert.equal((await start.json() as {taskId:string}).taskId, taskId);
     assert.equal((await fetch(`${s.server.url}/api/executions/${id}`, { headers: { Cookie: s.cookie } })).status, 200);
