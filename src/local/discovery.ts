@@ -50,9 +50,20 @@ export async function discoverProject(repoRoot:string,settings:LocalSettings,pro
   }catch(error){warnings.push(`No se pudo interpretar package.json: ${(error as Error).message}. Configura los checks manualmente.`);}
  }
  if(set.has(".salem-check.mjs")){if(!stack.includes("Node.js"))stack.push("Node.js");checks.push({id:"salem-demo",command:[process.execPath,".salem-check.mjs"],required:true,toolFiles:[".salem-check.mjs"]});}
- if(set.has("pyproject.toml")||set.has("requirements.txt")||set.has("setup.py")){
+ const django=set.has("manage.py")&&await localFile("manage.py")&&await read("manage.py")!==null,ruffConfigs:string[]=[];
+ for(const file of ["ruff.toml",".ruff.toml"])if(set.has(file)&&await localFile(file)&&await read(file)!==null)ruffConfigs.push(file);
+ if(set.has("pyproject.toml")||set.has("requirements.txt")||set.has("setup.py")||django||ruffConfigs.length){
   stack.push("Python");const pyproject=set.has("pyproject.toml")?await read("pyproject.toml"):null,requirements=set.has("requirements.txt")?await read("requirements.txt"):null;
   if(/pytest/i.test(`${pyproject??""}\n${requirements??""}`))checks.push({id:"pytest",command:["python","-m","pytest"],required:true,...(set.has("pyproject.toml")?{toolFiles:["pyproject.toml"]}:{})});
+  if(django){
+   stack.push("Django");checks.push({id:"django-check",command:["python","manage.py","check"],required:true,toolFiles:["manage.py"]},{id:"django-migrations",command:["python","manage.py","makemigrations","--check","--dry-run"],required:true,toolFiles:["manage.py"]});
+   warnings.push("Los checks de Django requieren el entorno y los ajustes del proyecto (por ejemplo DJANGO_SETTINGS_MODULE y dependencias instaladas); puede ser necesario ajustarlos.");
+  }
+  // Unrelated ruff mentions are accepted false positives: users review these proposals.
+  const ruffFiles:string[]=[];
+  if(pyproject!==null&&/ruff/i.test(pyproject)&&await localFile("pyproject.toml"))ruffFiles.push("pyproject.toml");
+  if(requirements!==null&&/ruff/i.test(requirements)&&await localFile("requirements.txt"))ruffFiles.push("requirements.txt");
+  ruffFiles.push(...ruffConfigs);if(ruffFiles.length)checks.push({id:"ruff",command:["python","-m","ruff","check","."],required:true,toolFiles:ruffFiles});
  }
  if(set.has("Cargo.toml")){stack.push("Rust");checks.push({id:"cargo-test",command:["cargo","test"],required:true,toolFiles:["Cargo.toml"]});}
  if(set.has("go.mod")){stack.push("Go");checks.push({id:"go-test",command:["go","test","./..."],required:true,toolFiles:["go.mod"]});}
