@@ -56,7 +56,7 @@ export async function discoverProject(repoRoot:string,settings:LocalSettings,pro
   stack.push("Python");const pyproject=set.has("pyproject.toml")?await read("pyproject.toml"):null,requirements=set.has("requirements.txt")?await read("requirements.txt"):null;
   if(/pytest/i.test(`${pyproject??""}\n${requirements??""}`))checks.push({id:"pytest",command:["python","-m","pytest"],required:true,...(set.has("pyproject.toml")?{toolFiles:["pyproject.toml"]}:{})});
   if(django){
-   stack.push("Django");checks.push({id:"django-check",command:["python","manage.py","check"],required:true,toolFiles:["manage.py"]},{id:"django-migrations",command:["python","manage.py","makemigrations","--check"],required:true,toolFiles:["manage.py"]});
+   stack.push("Django");checks.push({id:"django-check",command:["python","manage.py","check"],required:true,toolFiles:["manage.py"]});
    warnings.push("Los checks de Django requieren el entorno y los ajustes del proyecto (por ejemplo DJANGO_SETTINGS_MODULE y dependencias instaladas); puede ser necesario ajustarlos.");
   }
   // Unrelated ruff mentions are accepted false positives: users review these proposals.
