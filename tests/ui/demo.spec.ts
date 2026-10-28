@@ -72,6 +72,33 @@ test('a failed refresh after creating the cart never sends its goal to another p
  await page.getByRole('button',{name:'Investigar objetivo',exact:true}).click();
  await expect.poll(()=>conversations.length).toBe(1);expect(conversations[0].projectId).toBe('cart-p');
 });
+test('a discarded cart suggestion is never prefilled into another project',async({page})=>{
+ const goal='Completa el carrito de cart.mjs: calcula el subtotal, el costo de envío y el total. Conserva la API y los verificadores existentes.';
+ const project=(id:string,name:string)=>({id,revision:1,name,archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:id,repoRoot:'C:/Salem/'+id,contextFiles:[],agents:{codex:{provider:'codex',command:['codex']}},supervisor:{roles:roles('codex','codex')},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}});
+ const other=project('other-p','Proyecto existente'),cart=project('cart-p','Ejemplo carrito'),conversations:any[]=[];let current:any={...state,projects:[other]};
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(['/api/bootstrap','/api/state'].includes(u.pathname))return r.fulfill({json:{csrfToken:'csrf',state:current,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/projects/demo/plan')return r.fulfill({json:{roles:roles('codex','codex'),selected:'codex',fallback:false,crossProvider:false,estimates:[estimate('codex',['define','build','review'])]}});
+  if(u.pathname==='/api/projects/demo'){current={...state,projects:[other,cart]};return r.fulfill({json:{project:cart,goal}});}
+  if(u.pathname==='/api/conversations'){conversations.push(r.request().postDataJSON());return r.fulfill({status:500,json:{error:'Sin conversación en la prueba'}});}
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ page.on('dialog',d=>void d.accept());
+ await page.goto('/');
+ await page.getByRole('button',{name:'Crear ejemplo del carrito',exact:true}).click();
+ await page.getByRole('dialog',{name:'Crear ejemplo del carrito'}).getByRole('button',{name:'Confirmar y crear ejemplo',exact:true}).click();
+ await expect(page.getByLabel('Qué quieres lograr')).toHaveValue(goal);
+ await page.getByRole('navigation').getByRole('button',{name:'Proyectos'}).first().click();
+ await expect(page.getByRole('heading',{name:'Proyectos',exact:true})).toBeVisible();
+ await page.locator('[data-project-actions="other-p"]').getByRole('button',{name:'Abrir trabajo',exact:true}).click();
+ await expect(page.getByLabel('Proyecto del objetivo')).toHaveValue('other-p');
+ await expect(page.getByLabel('Qué quieres lograr')).toHaveValue('');
+ await expect(page.getByRole('button',{name:'Investigar objetivo',exact:true})).toBeDisabled();
+ // The discarded suggestion does not come back for the cart either.
+ await page.getByRole('navigation').getByRole('button',{name:'Proyectos'}).first().click();
+ await page.locator('[data-project-actions="cart-p"]').getByRole('button',{name:'Abrir trabajo',exact:true}).click();
+ await expect(page.getByLabel('Proyecto del objetivo')).toHaveValue('cart-p');await expect(page.getByLabel('Qué quieres lograr')).toHaveValue('');
+ expect(conversations).toEqual([]);
+});
 test('home never falls back to another project when the requested one is missing',async({page})=>{
  const other={id:'other-p',revision:1,name:'Proyecto existente',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'other',repoRoot:'C:/Salem/other',contextFiles:[],agents:{codex:{provider:'codex',command:['codex']}},supervisor:{roles:roles('codex','codex')},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
  await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
