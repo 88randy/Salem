@@ -6,11 +6,12 @@ import type { ProjectConfig, RunState, AcceptedPredecessorEvidence } from "../co
 import { runTask, resumeRun, runFingerprint, verifyAcceptedBase, type RunnerOptions } from "../runner.js";
 import {copyAcceptedTree} from './continuation.js';
 import { summarizeRun } from "../metrics.js";
+import { repositorySnapshot } from "../repository.js";
 import { StateStore,digest } from "../state-store.js";
 import { runProcess, redact } from "../process.js";
 import type { ExecutionDetail, ExecutionRecord, Provider } from "./contracts.js";
 import type { LocalStore } from "./store.js";
-import { localDiff, localGit } from "./git.js";
+import { localDiff, localGit, localPatch } from "./git.js";
 import { localError, localText, uuid } from "./validation.js";
 
 const activeStatuses=new Set(["preparing","running"]);
@@ -31,11 +32,11 @@ export class ExecutionManager {
  isBusy(provider:Provider):boolean{return [...this.active.values()].some(v=>v.providers.includes(provider));}
  isActive(id:string):boolean{return this.active.has(id);}
  async checkpoint(id:string):Promise<RunState|null>{return this.readRun(await this.store.findExecution(id));}
- async acceptedBase(id:string):Promise<NonNullable<RunnerOptions['acceptedBase']>>{
+ async acceptedBase(id:string,options:{readOnly?:boolean}={}):Promise<NonNullable<RunnerOptions['acceptedBase']>>{
   const e=await this.store.findExecution(id);if(e.status!=='completed'||!e.workspace||this.active.has(id))throw localError('La tarea anterior no tiene un resultado confirmado.',409);
   await this.ownedWorkspace(e.workspace,e.id);const gitDir=await this.ownedPath('workspaces',e.id,'.git');if(!(await lstat(gitDir)).isDirectory())throw localError('La identidad Git de la base salió de la copia aislada.');
   const run=await this.readRun(e);if(!run||run.expected.gitDir!==gitDir)throw localError('No hay checkpoint aceptado con identidad Git válida.');
-  const base={state:run,config:this.config(e),evidenceRoot:join(e.stateDir,run.id,'checks')};await verifyAcceptedBase(base,e.workspace);return base;
+  const base={state:run,config:this.config(e),evidenceRoot:join(e.stateDir,run.id,'checks')};await verifyAcceptedBase(base,e.workspace,options);return base;
  }
  async predecessorEvidence(id:string):Promise<AcceptedPredecessorEvidence[]>{
   const state=await this.store.readState(),current=state.executions.find(e=>e.id===uuid(id));if(!current)throw localError('Ejecución no encontrada.',404);
@@ -222,6 +223,26 @@ export class ExecutionManager {
    metrics.limitations.push("Local total is measured preparation plus core wall time, including pauses between resumed invocations; queue time is excluded.");
   }
   await walk(root);return {execution,run,metrics,diff,artifacts};
+ }
+ /**
+  * Binary-safe patch of an accepted execution against its source commit; never mutates the copy.
+  * The copy must still be the tree that was accepted (Git identity and repository snapshot), before
+  * and after the export, so later edits never leave Salem as if they had been reviewed.
+  */
+ async patch(id:string):Promise<{name:string;data:Buffer}>{
+  const e=await this.store.findExecution(id),run=e.status==="completed"&&!this.active.has(e.id)?await this.readRun(e).catch(()=>null):null;
+  if(!run||!summarizeRun(run).accepted||!e.sourceSha)throw localError("Solo se puede exportar el parche de una ejecución aceptada.",409);
+  if(!e.workspace)throw localError("La ejecución no conserva una copia aislada.",410);
+  try{await this.ownedWorkspace(e.workspace,e.id);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")throw localError("La copia aislada ya no existe; no se puede exportar el parche.",410);throw error;}
+  const changed="La copia aislada ya no coincide con el resultado aceptado (cambió después de la revisión o su entrega no es local); no se exporta un parche sin revisar.";
+  let expected:string;
+  try{const base=await this.acceptedBase(e.id,{readOnly:true});expected=digest(base.state.expected);}
+  catch(error){if((error as {status?:number}).status===404)throw error;throw localError(`${changed} ${redact((error as Error).message)}`,409);}
+  const data=await localPatch(e.workspace,e.sourceSha,this.store.root);
+  const after=await repositorySnapshot(e.workspace,{readOnly:true}).then(digest,()=>null);
+  if(after!==expected)throw localError(changed,409);
+  if(!data.length)throw localError("La ejecución aceptada no tiene cambios respecto a su commit de origen.",409);
+  return {name:`salem-${e.id.slice(0,8)}.patch`,data};
  }
  async artifact(id:string,path:string,offset=0):Promise<{text:string;truncated:boolean;nextOffset:number}>{
   await this.store.findExecution(id);localText(path,"ruta del artefacto",2000);

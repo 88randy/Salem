@@ -54,6 +54,25 @@ El ejemplo del carrito recorre el flujo completo en un repositorio pequeño: inv
 
 Si respondes con otra política, el paso de envío no pasa el check `shipping`: Salem se detiene, explica el fallo y conserva el subtotal aceptado. Envía la política correcta en el chat para replantear lo pendiente sobre ese resultado. Si el proveedor agota su cuota a mitad del plan, ocurre lo mismo: el paso en curso se detiene con su evidencia y los pasos aceptados se conservan.
 
+## Llevar el cambio aceptado a tu repositorio
+
+En el detalle de una ejecución aceptada, **Descargar parche** entrega un archivo `.patch` con todo el cambio respecto al commit de origen de la tarea (`sourceSha`, visible en **Historial**): archivos nuevos, eliminados, binarios, carpetas nuevas y cambios de modo. En una conversación, el resultado aceptado es la ejecución del último paso (**Revisar resultado aceptado**) y su parche ya incluye los pasos anteriores. La descarga no modifica la copia aislada ni tu repositorio; la API equivalente es `GET /api/executions/<id>/patch`.
+
+Aplícalo desde la raíz de tu repositorio. Primero comprueba qué toca y si encaja:
+
+```sh
+git apply --stat salem-1a2b3c4d.patch
+git apply --3way --check salem-1a2b3c4d.patch
+git apply --3way salem-1a2b3c4d.patch
+```
+
+- **Árbol limpio en `sourceSha`:** `git apply` reproduce exactamente el árbol aceptado. Añade `--index` si quieres dejarlo preparado para commit, incluidos los cambios de modo en Windows.
+- **Rama que avanzó después de `sourceSha`:** `--3way` usa los blobs de origen que registra el parche para fusionar. Si hay conflictos, los marca en los archivos y en el índice; resuélvelos y revisa con `git diff` antes de hacer commit. Si prefieres aislarlo, crea una rama en `sourceSha` (`git switch -c salem-cambio <sourceSha>`), aplica allí y luego fusiona o rebasa con tus herramientas habituales.
+- **Árbol con cambios sin commit:** `--3way` exige que los archivos afectados coincidan con el índice. Guarda o confirma antes tu trabajo (`git stash push -m antes-de-salem`), aplica el parche y recupera tus cambios con `git stash pop`; o aplícalo en un `git worktree` separado.
+- **Si falla:** `git apply` no deja cambios a medias cuando la comprobación falla. Con `--reject` aplica lo que encaja y guarda el resto en archivos `.rej` para revisión manual (no combina con `--3way`).
+
+El parche no aplica la redacción de secretos del diff en pantalla, porque alteraría su contenido: revísalo antes de compartirlo. Si supera 2 MB, la descarga se rechaza con un error claro; en ese caso recupera el cambio desde la ruta de la copia aislada. Si la copia aislada ya no existe, la descarga responde que no está disponible. El parche solo se genera si la copia sigue siendo exactamente el resultado aceptado (misma identidad Git e instantánea del repositorio, antes y después de exportar); si alguien la modificó después de la revisión, la descarga se rechaza para no entregar cambios sin revisar. Su forma no depende de tu configuración de Git (`diff.context`, `diff.noprefix`, `GIT_DIFF_OPTS`): siempre usa tres líneas de contexto y prefijos `a/` y `b/`. Tampoco la alteran marcas del índice (`assume-unchanged`, `skip-worktree`), filtros `clean`/`process` de cualquier nivel de configuración ni `core.attributesFile`; si la copia tiene `info/attributes` o reglas de conversión de fin de línea añadidas después de aceptar, la descarga se rechaza.
+
 ## Límites actuales
 
 El coordinador ejecuta una tarea a la vez por conversación, incluso si algunos nodos del plan son independientes. Las referencias adjuntas son texto UTF-8: hasta ocho archivos, 40.000 caracteres por archivo y 100.000 en total. Las imágenes y archivos binarios no se admiten como referencias del chat.
