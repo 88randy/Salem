@@ -16,7 +16,7 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 export async function buildInputHash(root){
  const inputs=[];
  for(const folder of ['src','ui','templates'])for(const file of await filesAt(join(root,folder)))inputs.push([`${folder}/${file}`,hash(await readFile(join(root,folder,file)))]);
- for(const file of ['package.json','package-lock.json','tsconfig.json','scripts/build.mjs','scripts/windows/build-inputs.mjs'])inputs.push([file,hash(await readFile(join(root,file)))]);
+ for(const file of ['package.json','package-lock.json','tsconfig.json','scripts/build.mjs','scripts/windows/build-inputs.mjs','scripts/windows/reproducible-pe.mjs'])inputs.push([file,hash(await readFile(join(root,file)))]);
  return hash(JSON.stringify(inputs));
 }
 async function compiledOutputs(root){
