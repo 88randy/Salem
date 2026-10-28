@@ -5,9 +5,10 @@
 //
 // The helper is windows-job-helper.exe, compiled at build time from
 // windows-job-helper.cs with the system .NET Framework compiler. It creates the
-// launch gate itself, SUSPENDED, assigns it to the job through the handle that
-// CreateProcess returned and only then resumes it. No PID is ever used to pick a
-// process to contain, so a recycled PID cannot pull an unrelated process in.
+// launch gate itself with PROC_THREAD_ATTRIBUTE_JOB_LIST, so the kernel places it
+// in the job as part of CreateProcess: it never exists outside the job. No PID is
+// ever used to pick a process to contain, so a recycled PID cannot pull an
+// unrelated process in.
 //
 // Wiring (guardian side of the protocol documented in windows-job-helper.cs):
 //   helper fd 0/1  control lines (requests / replies and the gate "exit" event)
@@ -52,8 +53,13 @@ export class WindowsJob {
     for (const stream of [this.stdin, this.stdout, this.stderr]) stream.on("error", () => {});
     this.ready = this.reply().then(line => { if (line !== "ready") throw new Error(`Windows process containment unavailable: ${line}`); });
   }
-  /** Starts the helper and its job; await `ready` before launching. The path parameter exists for tests. */
-  static start(helper = helperPath): WindowsJob {
+  /**
+   * Starts the helper and its job; await `ready` before launching. Production
+   * omits `helper` and always gets the release helper. `helper` is a test seam:
+   * tests pass the fault-injection build (tests/windows-job-test-helper.ts) or a
+   * missing file, directly or through ProcessInput.windowsJobHelper.
+   */
+  static start(helper: string = helperPath): WindowsJob {
     // Absolute path next to this module: PATH must not be able to substitute the helper.
     return new WindowsJob(spawn(helper, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore", "ipc", "pipe", "pipe", "pipe"] }));
   }
@@ -70,7 +76,7 @@ export class WindowsJob {
     this.queue = next; return next;
   }
   /**
-   * Creates the gate inside the job (suspended, assigned by handle, resumed) and
+   * Creates the gate inside the job (JOB_LIST at CreateProcess) and
    * returns its PID for diagnostics only. Once this resolves the gate is contained.
    */
   async launch(executable: string, args: string[], cwd: string): Promise<number> {

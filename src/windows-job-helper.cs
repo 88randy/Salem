@@ -20,6 +20,11 @@
 //   EOF on fd 0                    -> exit; the last job handle closes and
 //                                     KILL_ON_JOB_CLOSE ends the whole tree.
 // If this helper dies for any reason, the same kill-on-close applies.
+//
+// Fault-injection hooks for tests (SALEM_TEST_JOB_HELPER_* environment variables)
+// exist only when compiled with /define:SALEM_TEST_HOOKS, which scripts/build.mjs
+// does for the test build (dist/tests/windows-job-helper.test.exe) alone. The
+// release helper in dist/src, the one that is stamped and packaged, has none.
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -81,12 +86,16 @@ static class WindowsJobHelper {
           waiter.Start(); // after "started": the "exit" event always follows the reply
         }
         else if (line == "terminate") {
+#if SALEM_TEST_HOOKS
           // Test-only fault injection: "active" (job not emptied), "error", or
           // "silent" (no reply), without touching the job.
           string fault = Environment.GetEnvironmentVariable("SALEM_TEST_JOB_HELPER_TERMINATE");
           if (fault == "active") Write("active 1");
           else if (fault == "error") Write("error injected terminate failure");
           else if (fault != "silent") Write("active " + Terminate());
+#else
+          Write("active " + Terminate());
+#endif
         }
         else Write("error unknown request");
       } catch (Exception e) { Write("error " + e.Message); }
@@ -164,7 +173,9 @@ static class WindowsJobHelper {
       // No CREATE_SUSPENDED: with JOB_LIST, job membership is part of process
       // creation itself, so there is no later assignment step left to protect.
       if (!CreateProcessW(application, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true, CreateNoWindow | ExtendedStartupInfoPresent, IntPtr.Zero, directory, ref startup, out created)) throw Win32("CreateProcess");
+#if SALEM_TEST_HOOKS
       TestPauseAfterCreate(created.ProcessId);
+#endif
       CloseHandle(created.Thread);
       IntPtr process = created.Process;
       Thread waiter = new Thread(delegate () {
@@ -181,6 +192,7 @@ static class WindowsJobHelper {
     }
   }
 
+#if SALEM_TEST_HOOKS
   // Test-only fault injection: with SALEM_TEST_JOB_HELPER_PAUSE_FILE set, record
   // "<helper pid> <gate pid>" there right after CreateProcess and stop, so a test
   // can kill this helper at the most dangerous point of a launch.
@@ -191,6 +203,7 @@ static class WindowsJobHelper {
     File.Move(path + ".tmp", path);
     Thread.Sleep(Timeout.Infinite);
   }
+#endif
 
   static uint Active() {
     Accounting info;

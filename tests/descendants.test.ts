@@ -9,6 +9,7 @@ import { alive, acquireLock } from "../src/state-store.js";
 import { runProcess } from "../src/process.js";
 import { WindowsJob } from "../src/windows-job.js";
 import { spawn } from "node:child_process";
+import { rawHelper, testHelperPath } from "./windows-job-test-helper.js";
 
 // The agent starts two detached grandchildren that escape libuv's job: one
 // inherits (and holds) the agent's stdout/stderr pipes, one ignores stdio.
@@ -26,8 +27,10 @@ const kill = async (dir: string) => {
 };
 const lease = async (dir: string) => JSON.parse(await readFile(join(dir, "leases", (await readdir(join(dir, "leases")))[0]!), "utf8"));
 const tree = async () => { const dir = await mkdtemp(join(tmpdir(), "salem tree ")); await mkdir(join(dir, "leases")); return dir; };
-const run = async (dir: string, mode: "exit" | "stay", extra: { timeoutMs?: number; signal?: AbortSignal } = {}) =>
-  runProcess({ command: [process.execPath, "-e", agent, dir, mode], cwd: dir, leaseDir: join(dir, "leases"), timeoutMs: extra.timeoutMs ?? 15000, maxOutputBytes: 10000, ...(extra.signal ? { signal: extra.signal } : {}) });
+// `faults: true` selects the test build of the containment helper, the only one
+// that honors the SALEM_TEST_JOB_HELPER_* fault-injection variables.
+const run = async (dir: string, mode: "exit" | "stay", extra: { timeoutMs?: number; signal?: AbortSignal; faults?: boolean } = {}) =>
+  runProcess({ command: [process.execPath, "-e", agent, dir, mode], cwd: dir, leaseDir: join(dir, "leases"), timeoutMs: extra.timeoutMs ?? 15000, maxOutputBytes: 10000, ...(extra.signal ? { signal: extra.signal } : {}), ...(extra.faults ? { windowsJobHelper: testHelperPath } : {}) });
 const spawned = async (dir: string) => { for (let i = 0; i < 200 && !["piped.pid", "silent.pid"].every(f => existsSync(join(dir, f))); i++) await delay(50); };
 const windows = { skip: process.platform !== "win32", timeout: 30000 };
 
@@ -85,12 +88,12 @@ test("windows: an unconfirmable tree cleanup withholds the receipt and keeps new
 // recycled PID could pull an unrelated process into the job (and kill it later).
 test("windows: the containment helper refuses PID-based assignment, so a bystander is never pulled into the job", windows, async () => {
   const bystander = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore", windowsHide: true });
-  const job = WindowsJob.start();
+  // The release helper, driven over its documented control protocol.
+  const job = rawHelper();
   try {
-    await job.ready;
-    const request = (job as unknown as { reply(line: string): Promise<string> }).reply.bind(job);
-    assert.notEqual(await request(`assign ${bystander.pid}`), "ok", "the helper accepted a PID to contain");
-    assert.equal(await job.terminate(), true);
+    assert.equal(await job.ready, "ready");
+    assert.notEqual(await job.request(`assign ${bystander.pid}`), "ok", "the helper accepted a PID to contain");
+    assert.equal(await job.request("terminate"), "active 0");
     await delay(200);
     assert.equal(alive(bystander.pid!), true, "terminating the job killed a process that was only named by PID");
   } finally { job.close(); bystander.kill(); }
@@ -129,7 +132,7 @@ test("windows: a helper killed right after creating the gate leaves no gate and 
   process.env.SALEM_TEST_JOB_HELPER_PAUSE_FILE = marker;
   let pending: ReturnType<typeof run> | undefined;
   try {
-    pending = run(dir, "stay");
+    pending = run(dir, "stay", { faults: true });
     for (let i = 0; i < 300 && !existsSync(marker); i++) await delay(50);
     const [helper, gate] = (await readFile(marker, "utf8")).split(" ").map(Number) as [number, number];
     assert.equal(alive(gate), true, "the gate should exist while the helper is paused");
@@ -168,7 +171,7 @@ for (const fault of ["active", "error", "silent"] as const) {
   test(`windows: cancel settles without a receipt when job termination answers ${fault}`, windows, async () => {
     const dir = await tree(), c = new AbortController();
     process.env.SALEM_TEST_JOB_HELPER_TERMINATE = fault;
-    const pending = run(dir, "stay", { signal: c.signal });
+    const pending = run(dir, "stay", { signal: c.signal, faults: true });
     try {
       await spawned(dir);
       c.abort();
@@ -183,7 +186,7 @@ for (const fault of ["active", "error", "silent"] as const) {
 test("windows: cancel while the launch is pending settles without a receipt and leaves no gate", windows, async () => {
   const dir = await tree(), marker = join(dir, "paused.txt"), c = new AbortController();
   process.env.SALEM_TEST_JOB_HELPER_PAUSE_FILE = marker;
-  const pending = run(dir, "stay", { signal: c.signal });
+  const pending = run(dir, "stay", { signal: c.signal, faults: true });
   try {
     for (let i = 0; i < 300 && !existsSync(marker); i++) await delay(50);
     const gate = Number((await readFile(marker, "utf8")).split(" ")[1]);

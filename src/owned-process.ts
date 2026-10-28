@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProcessInput, ProcessResult } from "./process.js";
 import { resolveExecutable, redact } from "./process.js";
@@ -10,6 +10,7 @@ export async function runOwnedProcess(input: ProcessInput): Promise<ProcessResul
   const failed = (error: string, status: ProcessResult["status"] = "failed"): ProcessResult => ({ status, exitCode: null, stdout: "", stderr: "", error });
   if (input.signal?.aborted) return failed("Cancelled before launch", "cancelled");
   if (!input.command.length || input.timeoutMs <= 0 || input.maxOutputBytes <= 0) return failed("Invalid process budgets");
+  if (input.windowsJobHelper !== undefined && !isAbsolute(input.windowsJobHelper)) return failed("The containment helper path must be absolute");
   let exe: string;
   try { exe = await resolveExecutable(input.command[0]!); } catch (e) { return failed(redact(String(e))); }
   const token = randomUUID(), file = join(input.leaseDir!, `${token}.json`);
@@ -62,7 +63,7 @@ export async function runOwnedProcess(input: ProcessInput): Promise<ProcessResul
           // on Windows and abandon the promise despite a finished guardian.
           return;
         }
-        host.send({ type: "start", command: [exe, ...input.command.slice(1)], cwd: input.cwd, timeoutMs: input.timeoutMs, env: input.env }, e => { if (e) stop("failed", e.message); });
+        host.send({ type: "start", command: [exe, ...input.command.slice(1)], cwd: input.cwd, timeoutMs: input.timeoutMs, env: input.env, jobHelper: input.windowsJobHelper }, e => { if (e) stop("failed", e.message); });
         host.stdin!.end(input.input ?? "");
       } catch (e) { stop("failed", redact(String(e))); host.stdin!.end(); }
     })();
