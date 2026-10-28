@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, realpath, lstat, open, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { isInside } from "../config.js";
 import type { ProjectConfig, RunState, AcceptedPredecessorEvidence } from "../contracts.js";
 import { runTask, resumeRun, runFingerprint, verifyAcceptedBase, type RunnerOptions } from "../runner.js";
@@ -296,7 +297,8 @@ export class ExecutionManager {
    // uploadpack.packObjectsHook comes only from the user's own global/system config, which they control.
    await this.options.beforeBranchFetch?.();
    await git([...["protocol.allow=never","protocol.file.allow=always","protocol.version=2","core.alternateRefsCommand=","core.fsmonitor=false","gc.auto=0","maintenance.auto=false","fetch.writeCommitGraph=false"].flatMap(entry=>["-c",entry]),
-    "fetch","--quiet","--no-tags","--no-write-fetch-head","--no-recurse-submodules",workspace,commit],{env:{GIT_ALLOW_PROTOCOL:"file"}});
+    // A remote named like the copy (path or URL) would otherwise supply its own remote.<name>.uploadpack command.
+    "fetch","--quiet","--no-tags","--no-write-fetch-head","--no-recurse-submodules","--upload-pack=git-upload-pack",pathToFileURL(workspace).href,commit],{env:{GIT_ALLOW_PROTOCOL:"file"}});
    // The intent is durable before the ref exists, so a crash or failed write below is settled on retry or startup.
    await this.store.patchExecution(e.id,{branch:{ref,commit,createdAt:Date.now(),pending:true}});
    try{await git(["update-ref","--no-deref","-m",`salem: rama del resultado aceptado ${e.id}`,ref,commit,""],{env});}

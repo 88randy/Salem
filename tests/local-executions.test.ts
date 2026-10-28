@@ -4,6 +4,7 @@ import {randomBytes,randomUUID} from "node:crypto";
 import {mkdtemp,readFile,writeFile,mkdir,symlink,rm,readdir,copyFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join,resolve} from "node:path";
+import {pathToFileURL} from "node:url";
 import {LocalStore} from "../src/local/store.js";
 import {runProcess} from "../src/process.js";
 import {git} from "./supervisor-fixture.js";
@@ -324,7 +325,8 @@ test("branch creation ignores hostile repository config, never follows a symboli
   await writeFile(script,`import {appendFileSync} from "node:fs";appendFileSync(${JSON.stringify(sentinel)},"ran\\n");`);
   // insteadOf rewrites the copy's path to ext::, which would run a command if any protocol but file were allowed.
   const ext=(text:string)=>text.replaceAll("%","%%").replaceAll(" ","% ");
-  await git(repo,"config",`url.ext::${ext(process.execPath)} ${ext(script)}.insteadOf`,done.workspace!);await git(repo,"config","protocol.ext.allow","always");
+  for(const spelling of [done.workspace!,pathToFileURL(done.workspace!).href])await git(repo,"config","--add",`url.ext::${ext(process.execPath)} ${ext(script)}.insteadOf`,spelling);
+  await git(repo,"config","protocol.ext.allow","always");
   await assert.rejects(m.branch(e.id,"salem/ext"));assert.equal(await ran(),false,"ext:: command ran");
   assert.equal((await f.store.findExecution(e.id)).branch,undefined);assert.equal(await git(repo,"for-each-ref","refs/heads/salem/ext"),"");
   await git(repo,"config","--remove-section",`url.ext::${ext(process.execPath)} ${ext(script)}`);
@@ -336,6 +338,8 @@ test("branch creation ignores hostile repository config, never follows a symboli
   const alt=join(f.root,"alt");await mkdir(alt);await git(alt,"init","-q");await writeFile(join(alt,"z.txt"),"z\n");await git(alt,"add","z.txt");await git(alt,"-c","user.name=T","-c","user.email=t@example.invalid","commit","-q","-m","z");
   await mkdir(join(repo,".git","objects","info"),{recursive:true});await writeFile(join(repo,".git","objects","info","alternates"),join(alt,".git","objects").replaceAll("\\","/")+"\n");
   await git(repo,"config","core.alternateRefsCommand",`"${process.execPath.replaceAll("\\","/")}" "${script.replaceAll("\\","/")}"; true`);
+  // A remote named like the copy (path or file:// spelling) must not pick its own upload-pack command.
+  for(const remote of [done.workspace!,pathToFileURL(done.workspace!).href]){await git(repo,"config",`remote.${remote}.url`,done.workspace!);await git(repo,"config",`remote.${remote}.uploadpack`,`"${process.execPath.replaceAll("\\","/")}" "${script.replaceAll("\\","/")}"`);}
   // The receipt write after update-ref fails twice; retries finish the same branch instead of creating another.
   const original=f.store.patchExecution.bind(f.store);let failures=2;
   f.store.patchExecution=async(id,patch)=>{if(patch.branch&&!patch.branch.pending&&failures>0){failures--;throw Error("simulated crash after update-ref");}return original(id,patch);};
