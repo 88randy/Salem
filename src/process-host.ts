@@ -1,17 +1,48 @@
 // A separate guardian owns one subprocess tree. IPC loss means the supervisor
 // died, so no agent may continue mutating the worktree after recovery begins.
+// POSIX contains the tree in a process group. Windows contains it in a Job
+// Object (see windows-job.ts) because parent PIDs cannot find descendants once
+// the agent has exited. The `cleaned` receipt is sent only after the tree is
+// confirmed empty; otherwise the lease stays open and new work stays blocked.
 import { spawn, type ChildProcess } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { atomicJson } from "./state-store.js";
+import { WindowsJob, controlDeadlineMs } from "./windows-job.js";
 const [leaseFile, token] = process.argv.slice(2);
-let child: ChildProcess | undefined;
+const windows = process.platform === "win32";
+type Start = { type: string; command: string[]; cwd: string; timeoutMs: number; env?: Record<string, string> };
+let child: ChildProcess | undefined; // POSIX agent
+let job: WindowsJob | undefined;
+let contained = false; // Windows: the launch gate is in the job, so the job covers the whole tree.
+let launching = false; // Windows: a gate may exist in the job but is not yet confirmed started.
+let started = false;
 let stopping = false;
 let finishing = false;
+let timer: NodeJS.Timeout | undefined;
+let launchDeadline: NodeJS.Timeout | undefined;
+let abandoned = false; // the tree could not be proven empty: no receipt, ever
 let killerDone: Promise<void> = Promise.resolve();
+// Windows: before a launch request no gate exists; from then on only the job can prove the tree is empty.
+const confirmEmpty = async (): Promise<boolean> => !contained || (job ? job.terminate() : false);
+// Bounded give-up: closing the helper closes the job handle, so kill-on-close ends
+// whatever is still inside; the receipt is withheld and the lease stays open.
+function unconfirmed(): void {
+  if (abandoned) return;
+  abandoned = true; finishing = true; process.exitCode = 1; clearTimeout(timer); clearTimeout(launchDeadline);
+  job?.close();
+  process.stderr.write("Process tree cleanup could not be confirmed", () => { if (process.connected) process.disconnect(); process.exit(1); });
+}
 async function finish(code: number): Promise<void> {
-  if (finishing) return; finishing = true; stopping = true;
+  if (finishing) return; finishing = true; stopping = true; clearTimeout(timer);
   await killerDone;
+  if (abandoned) return;
   // The child has its own group; clean remaining members on normal POSIX exit.
-  if (process.platform !== "win32" && child?.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already empty */ } }
+  if (!windows && child?.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already empty */ } }
+  const clean = !windows || await confirmEmpty();
+  if (abandoned) return;
+  job?.close();
+  if (!clean) { unconfirmed(); return; }
   try {
     await atomicJson(leaseFile!, { pid: process.pid, token, closed: true });
     process.exitCode = code;
@@ -20,26 +51,67 @@ async function finish(code: number): Promise<void> {
 }
 function stop(): void {
   if (stopping) return; stopping = true;
-  if (!child?.pid) { void finish(1); return; }
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-    killerDone = new Promise(resolve => { killer.once("close", () => resolve()); });
-    killer.on("error", () => child?.kill());
-  } else {
-    try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+  if (windows) {
+    if (contained) terminateOrAbandon(); // a confirmed-empty job then lets the gate exit settle the run
+    // A pending launch gets a bounded wait; then the helper is closed, the launch
+    // fails, and startContained settles through the job (unconfirmed if it cannot answer).
+    else if (launching) launchDeadline = setTimeout(() => { if (launching) job!.close(); }, controlDeadlineMs);
+    else void finish(1);
+    return;
   }
+  if (!child?.pid) { void finish(1); return; }
+  try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+}
+// Termination that reports survivors, fails or does not answer in time gives the tree up.
+function terminateOrAbandon(): void {
+  killerDone = job!.terminate().then(ok => { if (!ok) unconfirmed(); });
+}
+function pipe(stdin: Writable, stdout: Readable, stderr: Readable): void {
+  process.stdin.pipe(stdin); stdout.pipe(process.stdout); stderr.pipe(process.stderr);
+  stdin.on("error", () => {});
+}
+function attach(spawned: ChildProcess): void {
+  child = spawned;
+  pipe(child.stdin!, child.stdout!, child.stderr!);
+  child.on("error", e => { process.stderr.write(e.message); });
+  child.on("close", code => { void finish(code ?? 1); });
+}
+async function startContained(message: Start): Promise<void> {
+  job = WindowsJob.start(); // finish() closes it, even while it is still starting
+  try { await job.ready; } catch (e) { process.stderr.write((e as Error).message); void finish(1); return; }
+  if (stopping) return;
+  const gate = job;
+  launching = true;
+  try { await gate.launch(process.execPath, [fileURLToPath(new URL("./job-gate.js", import.meta.url))], message.cwd); }
+  catch (e) {
+    // A failed or unknown launch outcome (e.g. the helper died right after creating
+    // the gate) is settled by the job, never assumed: `cleaned` is sent only if the
+    // live helper confirms the job is empty. Otherwise the receipt is withheld and
+    // new work stays blocked.
+    launching = false; contained = true; clearTimeout(launchDeadline);
+    process.stderr.write((e as Error).message); void finish(1); return;
+  }
+  launching = false; contained = true; clearTimeout(launchDeadline);
+  // Run settles when the gate has exited and every holder of its output pipes is gone.
+  const drained = (stream: Readable) => new Promise<void>(resolve => { stream.once("close", resolve); });
+  pipe(gate.stdin, gate.stdout, gate.stderr);
+  void gate.gateExit.then(() => {
+    // Descendants holding inherited pipes would delay EOF; end the tree on exit.
+    void gate.terminate().then(ok => { if (!ok && !finishing) unconfirmed(); });
+  });
+  void Promise.all([gate.gateExit, drained(gate.stdout), drained(gate.stderr)]).then(([code]) => finish(code ?? 1));
+  if (stopping) { terminateOrAbandon(); return; }
+  gate.send({ command: message.command, cwd: message.cwd, env: { ...process.env, ...message.env } }, e => { if (e) stop(); });
 }
 process.on("disconnect", stop);
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 process.on("message", (raw: unknown) => {
-  const message = raw as { type: string; command: string[]; cwd: string; timeoutMs: number; env?: Record<string, string> };
+  const message = raw as Start;
   if (message.type === "stop") { stop(); return; }
-  if (message.type !== "start" || child || stopping) return;
-  child = spawn(message.command[0]!, message.command.slice(1), { cwd: message.cwd, env: { ...process.env, ...message.env }, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
-  const timer = setTimeout(stop, message.timeoutMs);
-  process.stdin.pipe(child.stdin!); child.stdout!.pipe(process.stdout); child.stderr!.pipe(process.stderr);
-  child.stdin!.on("error", () => {});
-  child.on("error", e => { process.stderr.write(e.message); });
-  child.on("close", code => { clearTimeout(timer); void finish(code ?? 1); });
+  if (message.type !== "start" || started || stopping) return;
+  started = true;
+  timer = setTimeout(stop, message.timeoutMs);
+  if (windows) { void startContained(message); return; }
+  attach(spawn(message.command[0]!, message.command.slice(1), { cwd: message.cwd, env: { ...process.env, ...message.env }, shell: false, windowsHide: true, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
 });

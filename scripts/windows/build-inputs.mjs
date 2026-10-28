@@ -21,7 +21,7 @@ export async function buildInputHash(root){
 }
 async function compiledOutputs(root){
  const outputs={};
- for(const folder of ['dist/src','web-dist'])for(const file of await filesAt(join(root,folder))){if(folder==='dist/src'&&!file.endsWith('.js'))continue;outputs[`${folder}/${file}`]=hash(await readFile(join(root,folder,file)));}
+ for(const folder of ['dist/src','web-dist'])for(const file of await filesAt(join(root,folder))){if(folder==='dist/src'&&!/\.(?:js|exe)$/.test(file))continue;outputs[`${folder}/${file}`]=hash(await readFile(join(root,folder,file)));}
  if(!outputs['dist/src/cli.js']||!outputs['web-dist/index.html'])throw new Error('Falta build del core o interfaz. Ejecuta npm run build.');
  return outputs;
 }

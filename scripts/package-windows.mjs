@@ -46,6 +46,8 @@ await cp(join(runtimeDir,'LICENSE'),join(stage,'runtime','LICENSE'));
 const coreFiles=(await filesAt(join(root,'dist','src'))).filter(f=>f.endsWith('.js'));
 if(!coreFiles.includes('cli.js')||!coreFiles.includes('local/server.js'))throw new Error('Falta build del core. Ejecuta npm run build antes de empaquetar.');
 for(const file of coreFiles){const contents=await readFile(join(root,'dist','src',file),'utf8');for(const match of contents.matchAll(/(?:from\s*|import\s*\()\s*["']([^"']+)["']/g))if(!match[1].startsWith('.')&&!match[1].startsWith('node:'))throw new Error(`Dependencia core no incluida: ${file}: ${match[1]}`);const target=join(stage,'app','dist','src',file);await mkdir(dirname(target),{recursive:true});await writeFile(target,contents);}
+// Windows process containment helper: without it owned processes fail closed.
+try{await cp(join(root,'dist','src','windows-job-helper.exe'),join(stage,'app','dist','src','windows-job-helper.exe'));}catch(e){if(e.code==='ENOENT')throw new Error('Falta dist/src/windows-job-helper.exe. Ejecuta npm run build en Windows antes de empaquetar.');throw e;}
 await cp(join(root,'web-dist'),join(stage,'app','web-dist'),{recursive:true});
 await cp(join(root,'templates'),join(stage,'app','templates'),{recursive:true});
 await writeFile(join(stage,'app','package.json'),JSON.stringify({name:packageJson.name,version:packageJson.version,type:'module',engines:packageJson.engines},null,2));
