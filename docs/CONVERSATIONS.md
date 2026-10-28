@@ -42,6 +42,18 @@ Estas medidas reducen trabajo repetido, pero no garantizan un consumo fijo. El p
 
 La entrega conversacional es local. El resultado permanece en la última copia aceptada, accesible desde el detalle. Publicar, integrar o desplegar requiere un flujo explícito de entrega con sus capacidades delegadas; iniciar el chat no publica automáticamente.
 
+## Ejemplo guiado: el carrito
+
+El ejemplo del carrito recorre el flujo completo en un repositorio pequeño: investigación, una pregunta de producto, un plan con pasos dependientes, checks, revisión independiente y verificación final. Su contenido está versionado en `fixtures/cart-quickstart/`: `cart.mjs` exporta `subtotal`, `shipping` y `total` sin implementar (importes en centavos enteros) y `checks/` contiene sus verificadores.
+
+1. En **Inicio**, pulsa **Crear ejemplo del carrito**. Como en la demo local, Salem comprueba tus cuentas y muestra qué proveedor define, implementa y revisa. Nada se crea ni consume cuota hasta que confirmas. Aún no hay una medición de referencia de este ejemplo, así que su consumo se muestra como desconocido.
+2. Salem crea el proyecto **Ejemplo carrito** y deja escrito en Inicio el objetivo sugerido: «Completa el carrito de cart.mjs: calcula el subtotal, el costo de envío y el total. Conserva la API y los verificadores existentes.» Pulsa **Investigar**. Si creas el ejemplo otra vez obtienes **Ejemplo carrito 2**, una copia independiente; la anterior y su historial no cambian.
+3. El objetivo no define la política de envío a propósito, así que Salem te la pregunta en el chat. Responde con la política que fijan los verificadores: «Envío de $99 si el subtotal es menor a $999; gratis desde $999. Un carrito vacío no paga envío.»
+4. Con tu respuesta, Salem prepara el plan. Debe tener al menos dos pasos dependientes, por ejemplo subtotal, después envío y después total. El check `api` es requerido en todos los pasos y comprueba que se conserven las exportaciones; `subtotal`, `shipping` y `total` se asocian a los criterios de cada paso, y el último comprueba el resultado conjunto.
+5. Al terminar, abre **Plan y resultados** → **Revisar resultado aceptado**. En el detalle de esa ejecución, **Descargar parche** entrega el cambio completo, que ya incluye los pasos anteriores. Aplícalo desde la raíz del repositorio del ejemplo (su ruta aparece en **Proyectos**) con `git apply --check` y después `git apply`, y comprueba el resultado con `node checks/total.mjs`.
+
+Si respondes con otra política, el paso de envío no pasa el check `shipping`: Salem se detiene, explica el fallo y conserva el subtotal aceptado. Envía la política correcta en el chat para replantear lo pendiente sobre ese resultado. Si el proveedor agota su cuota a mitad del plan, ocurre lo mismo: el paso en curso se detiene con su evidencia y los pasos aceptados se conservan.
+
 ## Límites actuales
 
 El coordinador ejecuta una tarea a la vez por conversación, incluso si algunos nodos del plan son independientes. Las referencias adjuntas son texto UTF-8: hasta ocho archivos, 40.000 caracteres por archivo y 100.000 en total. Las imágenes y archivos binarios no se admiten como referencias del chat.

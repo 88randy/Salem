@@ -15,3 +15,8 @@ export interface DemoPlan { roles: DemoRoles; selected: Provider; fallback: bool
 
 // Only measured runs belong here. No reference run has been recorded yet, so every provider is shown as unknown.
 export const demoEstimate: DemoEstimateReference = { version: 1, scenarios: [] };
+/** Built-in examples that share the provider-aware plan and confirmation: `sum` is the one-step demo, `cart` the multi-step quickstart. */
+export type DemoKind = "sum" | "cart";
+// Measured separately: the cart quickstart has a clarifying question and three dependent tasks. No run recorded yet.
+export const cartEstimate: DemoEstimateReference = { version: 1, scenarios: [] };
+export const demoReferences: Record<DemoKind, DemoEstimateReference> = { sum: demoEstimate, cart: cartEstimate };

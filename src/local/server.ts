@@ -16,6 +16,7 @@ import { EvolutionManager } from './evolution.js';
 import { discoverProject } from "./discovery.js";
 import { localError, localText, record, uuid } from "./validation.js";
 import type { LocalSettings, ProjectInput, Provider, TaskInput } from "./contracts.js";
+import { demoReferences, type DemoKind } from "./demo-estimate.js";
 
 export interface LocalExecutionManager extends Partial<Pick<ExecutionManager,'acceptedBase'|'startManaged'|'isActive'|'checkpoint'|'resumeManaged'>> {
   initialize(): Promise<void>;
@@ -75,6 +76,9 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
 }
 function provider(value: string): Provider {
   if (value !== "codex" && value !== "claude") throw localError("Proveedor desconocido."); return value;
+}
+function demoKind(value: unknown): DemoKind {
+  if (value === undefined) return "sum"; if (value !== "sum" && value !== "cart") throw localError("Ejemplo desconocido."); return value;
 }
 async function branches(input: unknown): Promise<{branches: string[]; head: string}> {
   const supplied = localText(input, "carpeta del repositorio", 8192);
@@ -202,17 +206,17 @@ export async function startLocalServer(options: LocalServerOptions) {
       if (path === "/api/projects") { json(response, 200, await store.saveProject(input as unknown as ProjectInput)); return; }
       if (path === "/api/tasks") { json(response, 200, await store.saveTask(input as unknown as TaskInput)); return; }
       if (path === "/api/projects/demo/plan") {
-        record(input, ["provider"]); const selected = input.provider === undefined ? undefined : provider(localText(input.provider, "proveedor", 20));
+        record(input, ["provider", "kind"]); const selected = input.provider === undefined ? undefined : provider(localText(input.provider, "proveedor", 20)), kind = demoKind(input.kind);
         // Readiness comes from fresh CLI status probes; they never run inference.
         await Promise.all((["claude", "codex"] as const).map(p => accounts!.check(p)));
-        json(response, 200, (await import("./demo.js")).planLocalDemo(accounts!.list(), (await store.readState()).settings, selected)); return;
+        json(response, 200, (await import("./demo.js")).planLocalDemo(accounts!.list(), (await store.readState()).settings, selected, demoReferences[kind])); return;
       }
       if (path === "/api/projects/demo") {
-        record(input, ["provider", "roles"]); const selected = input.provider === undefined ? undefined : provider(localText(input.provider, "proveedor", 20));
+        record(input, ["provider", "roles", "kind"]); const selected = input.provider === undefined ? undefined : provider(localText(input.provider, "proveedor", 20)), kind = demoKind(input.kind);
         if (input.roles === undefined) throw localError("Confirma el aviso de consumo antes de crear la demo.");
-        const demo = await import("./demo.js"), plan = demo.planLocalDemo(accounts!.list(), (await store.readState()).settings, selected);
+        const demo = await import("./demo.js"), plan = demo.planLocalDemo(accounts!.list(), (await store.readState()).settings, selected, demoReferences[kind]);
         if (!demo.sameRoles(plan.roles, input.roles)) throw localError("La disponibilidad de las cuentas cambió. Revisa de nuevo el aviso de consumo.", 412);
-        json(response, 200, await demo.createLocalDemo(store, plan.roles)); return;
+        json(response, 200, kind === "cart" ? await demo.createLocalCart(store, plan.roles) : await demo.createLocalDemo(store, plan.roles)); return;
       }
       if (path === "/api/projects/validate") {
         try { json(response, 200, await parseProjectConfig(input.config)); }

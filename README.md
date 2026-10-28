@@ -57,6 +57,8 @@ Escribe, por ejemplo:
 
 Salem investiga primero. Si falta la política de envío, te pregunta; con tu respuesta prepara el plan y trabaja paso a paso. Puedes precisar el objetivo, adjuntar referencias de texto, detener el trabajo o revisar sus resultados desde el mismo chat.
 
+Puedes recorrer este flujo con el ejemplo incluido: en **Inicio**, pulsa **Crear ejemplo del carrito**. [Guía del ejemplo del carrito →](docs/CONVERSATIONS.md#ejemplo-guiado-el-carrito)
+
 ```mermaid
 flowchart LR
     A[Tu objetivo] --> B[Investigar y planear]
