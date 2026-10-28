@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, copyFile, open } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, copyFile, open, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { runProcess } from "../process.js";
 import { localError } from "./validation.js";
@@ -17,10 +17,24 @@ export async function localGit(root:string,args:string[],systemDir:string,option
  return r.stdout.trim();
 }
 
+/**
+ * Overrides that keep clean/process filters (from any config level) and core.attributesFile out of a diff, so only
+ * the repository's own .gitattributes can convert work-tree bytes. Nothing is written to config.
+ */
+async function neutralConversions(root:string,systemDir:string,scratch:string):Promise<string[]>{
+ const overrides=["-c",`core.attributesFile=${join(scratch,"no-attributes")}`];
+ for(const key of (await localGit(root,["config","--name-only","--get-regexp","^filter\\..*\\.(process|smudge|clean|required)$"],systemDir,{allowMissing:true})).split(/\r?\n/).filter(Boolean)){
+  if(!/^filter\.[A-Za-z0-9._/-]+\.(?:process|smudge|clean|required)$/.test(key))throw localError("Filtro Git incompatible con una exportación sin scripts.",409);
+  overrides.push("-c",`${key}=${key.endsWith(".required")?"false":""}`);
+ }
+ return overrides;
+}
+
 export async function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
  const directory=await mkdtemp(join(systemDir,"diff-index-")),options={indexFile:join(directory,"index"),...(shape.env?{env:shape.env}:{})};
  try{
-  const git=(args:string[],extra:{input?:string;maxOutputBytes?:number}={})=>localGit(root,["-c","core.splitIndex=false",...args],systemDir,{...options,...extra});
+  const neutral=await neutralConversions(root,systemDir,directory);
+  const git=(args:string[],extra:{input?:string;maxOutputBytes?:number}={})=>localGit(root,["-c","core.splitIndex=false",...neutral,...args],systemDir,{...options,...extra});
   // Copy staged membership and modes too (the index holds the executable bit where core.fileMode is false),
   // including tracked additions now covered by ignore rules.
   try{await copyFile(resolve(root,await localGit(root,["rev-parse","--git-path","index"],systemDir)),options.indexFile);}
@@ -42,6 +56,10 @@ export async function localDiff(root:string,sourceSha:string,systemDir:string,sh
 const PATCH_CONFIG=["diff.context=3","diff.interHunkContext=0","diff.noprefix=false","diff.mnemonicPrefix=false","diff.suppressBlankEmpty=false","diff.relative=false","color.diff=false"];
 const PATCH_ARGS=["--binary","--full-index","--unified=3","--inter-hunk-context=0","--no-color","--no-relative","--src-prefix=a/","--dst-prefix=b/"];
 export async function localPatch(root:string,sourceSha:string,systemDir:string):Promise<Buffer>{
+ // Salem never creates these in a copy; they could convert accepted bytes in ways the acceptance check cannot see.
+ const info=resolve(root,await localGit(root,["rev-parse","--git-path","info/attributes"],systemDir));
+ const converted=await localGit(root,["config","--local","--name-only","--get-regexp","^core\\.(autocrlf|eol|checkroundtripencoding)$"],systemDir,{allowMissing:true});
+ if(converted||await stat(info).then(()=>true,()=>false))throw localError("La copia tiene atributos o reglas de conversión Git añadidos después de aceptar; no se exporta un parche que podría no coincidir con el resultado aceptado.",409);
  const directory=await mkdtemp(join(systemDir,"patch-")),file=join(directory,"accepted.patch");
  try{
   await localDiff(root,sourceSha,systemDir,{config:PATCH_CONFIG,args:[...PATCH_ARGS,`--output=${file}`],env:{GIT_DIFF_OPTS:""}});

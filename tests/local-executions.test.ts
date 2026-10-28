@@ -161,6 +161,18 @@ test("an accepted execution exports a binary-safe patch that rebuilds its tree o
   await writeFile(join(ws,"unreviewed.txt"),"after acceptance\n");await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/ya no coincide con el resultado aceptado/.test(error.message));
   await rm(join(ws,"unreviewed.txt"));await writeFile(join(ws,"context.txt"),"rewritten\n");await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409);
   await writeFile(join(ws,"context.txt"),(await readFile(join(clone,"context.txt"),"utf8")));assert.deepEqual((await m.patch(e.id)).data,patch.data);
+  // Conversion config added after acceptance must not reshape the accepted bytes: filters from any config level and
+  // core.attributesFile are neutralized, and conversion settings Salem never creates in the copy are refused.
+  const evil=join(f.root,"evil-filter.mjs"),attributes=join(f.root,"evil.attributes"),slash=(p:string)=>p.replaceAll("\\","/");
+  await writeFile(evil,"process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('FILTERED\\n'));\n");await writeFile(attributes,"*.txt filter=evil\n");
+  await git(ws,"config","--local","filter.evil.clean",`"${slash(process.execPath)}" "${slash(evil)}"`);await git(ws,"config","--local","core.attributesFile",slash(attributes));
+  assert.deepEqual((await m.patch(e.id)).data,patch.data);
+  const info=join(ws,".git","info");await mkdir(info,{recursive:true});await copyFile(attributes,join(info,"attributes"));
+  await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión/.test(error.message));
+  await rm(join(info,"attributes"));await git(ws,"config","--local","core.autocrlf","true");
+  await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión/.test(error.message));
+  for(const key of ["core.autocrlf","core.attributesFile","filter.evil.clean"])await git(ws,"config","--local","--unset",key);
+  assert.deepEqual((await m.patch(e.id)).data,patch.data);
   assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch)-/.test(name)),false);
   await rm(ws,{recursive:true,force:true});await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===410);
  }finally{await m.shutdown();}
