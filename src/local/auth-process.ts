@@ -6,8 +6,14 @@ export interface AuthProcess {
   input(text: string): Promise<void>;
 }
 
-// This guardian never writes files. IPC loss terminates the one tree it owns,
-// including when Salem exits abruptly. Command and input live only in memory.
+// This guardian never writes files. Command and input live only in memory.
+// When Salem exits abruptly, cleanup of the one tree the guardian owns differs by platform:
+// - POSIX: the login runs detached in its own process group, so only this guardian's
+//   'disconnect' handler (IPC loss) kills it, by signalling the whole group.
+// - Windows: libuv puts every non-detached child in a job object with
+//   JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (libuv src/win/process.c). Salem's death closes its
+//   job and kills this guardian, whose own job then kills the login; the 'disconnect'
+//   handler does not get to run. This path does not use src/windows-job.ts.
 const guardianSource = String.raw`
 const { spawn } = require('node:child_process');
 const { join } = require('node:path');

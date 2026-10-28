@@ -237,7 +237,22 @@ test("logout reservation survives a connected cache and close waits for owned lo
     assert.equal(JSON.parse(await readFile(s.stateFile, "utf8")).authenticated, true);
   } finally { await writeFile(gate, "release"); await logout?.catch(() => {}); await s.close(); }
 });
-test("guardian stops its own login process when the Salem parent dies", async () => {
+// Parent-death cleanup has a different owner per platform, so each platform gets its own honest test.
+// POSIX: the guardian spawns the login detached (its own process group), the parent receives SIGTERM alone and
+// the fixture ignores stdin EOF, so the only thing that can kill the login is the guardian's
+// process.on("disconnect", stop) handler. Removing that handler makes this test fail.
+// Windows: libuv assigns every non-detached child to a job object created with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+// (src/win/process.c, uv__init_global_job_handle and uv_spawn). Killing the parent closes its job, which kills the
+// guardian, whose own job then kills the login. The guardian handler never gets to run, so this test only checks
+// that containment guarantee; it would still pass with the handler removed.
+const isWindows = process.platform === "win32";
+test("POSIX: the guardian's IPC disconnect handler kills its detached login group when the Salem parent dies",
+  { skip: isWindows && "Windows kills the login through libuv job containment; covered by the Windows test" },
+  () => loginDiesWithSalemParent("IPC disconnect killed only the owned fixture login"));
+test("Windows: libuv kill-on-close job containment stops the login when the Salem parent dies (guardian handler not exercised)",
+  { skip: !isWindows && "POSIX has no job containment; covered by the POSIX guardian handler test" },
+  () => loginDiesWithSalemParent("closing the parent's libuv job killed the guardian and its login"));
+async function loginDiesWithSalemParent(message: string) {
   // The slow start and the torn pid write reproduce the loaded-runner flake; readiness must not depend on timing.
   const s = await setup({ loginDelayMs: 5500, pidWriteGapMs: 500 });
   const moduleUrl = new URL("../src/local/auth-process.js", import.meta.url).href;
@@ -269,11 +284,11 @@ test("guardian stops its own login process when the Salem parent dies", async ()
     parent.kill();
     const stopDeadline = Date.now() + 30000;
     while (alive(loginPid) && Date.now() < stopDeadline) await new Promise(resolve => setTimeout(resolve, 20));
-    assert.equal(alive(loginPid), false, "IPC disconnect killed only the owned fixture login");
+    assert.equal(alive(loginPid), false, message);
   } finally {
     parent.kill();
     if (loginPid && alive(loginPid)) process.kill(loginPid);
     await parentClosed;
     await s.close();
   }
-});
+}
