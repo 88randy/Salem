@@ -66,6 +66,30 @@ test("index flags cannot hide changed files from the diff or the exported patch"
  }finally{await f.m.shutdown();}
 });
 
+test("snapshots fingerprint files whose names look like secrets",async()=>{
+ const f=await diffFixture();
+ try{
+  const {repositorySnapshot}=await import("../src/repository.js"),file=join(f.workspace,"sk-ant-abcdefghijkl.txt");
+  await writeFile(file,"accepted\n");const before=await repositorySnapshot(f.workspace,{readOnly:true});
+  await writeFile(file,"changed after acceptance\n");const after=await repositorySnapshot(f.workspace,{readOnly:true});
+  assert.notEqual(after.treeHash,before.treeHash);
+ }finally{await f.m.shutdown();}
+});
+
+test("verification and export never start a Git transport, even for a missing object behind a promisor remote",async()=>{
+ const f=await diffFixture();
+ try{
+  const {repositorySnapshot}=await import("../src/repository.js"),{localPatch}=await import("../src/local/git.js");
+  const sha=(await f.store.findExecution(f.e.id)).sourceSha!,blob=await git(f.workspace,"rev-parse",`${sha}:tracked.txt`);
+  await writeFile(join(f.workspace,"tracked.txt"),"changed\n");await rm(join(f.workspace,".git","objects",blob.slice(0,2),blob.slice(2)));
+  const marker=join(f.root,"transport-ran.txt"),script=join(f.root,"transport.mjs"),slash=(p:string)=>p.replaceAll("\\","/");
+  await writeFile(script,`import {appendFileSync} from 'node:fs';appendFileSync(${JSON.stringify(marker)},'ran\\n');process.exit(1);\n`);
+  for(const [key,value] of [["core.repositoryformatversion","1"],["extensions.partialClone","evil"],["remote.evil.url","ssh://salem.invalid/x"],["remote.evil.promisor","true"],["core.sshCommand",`"${slash(process.execPath)}" "${slash(script)}"`]] as const)await git(f.workspace,"config","--local",key,value);
+  await repositorySnapshot(f.workspace,{readOnly:true}).catch(()=>null);await localPatch(f.workspace,sha,f.store.root).catch(()=>null);
+  await assert.rejects(readFile(marker),{code:"ENOENT"});
+ }finally{await f.m.shutdown();}
+});
+
 test("execution detail excludes ignored files and renders new binary files without dumping them",async()=>{
  const f=await diffFixture();
  try{

@@ -10,8 +10,10 @@ import type { ProjectConfig, RepositorySnapshot } from "./contracts.js";
 async function git(root: string, ...args: string[]): Promise<string> {
   const started = Date.now();
   // Reading the index would otherwise run a configured fsmonitor command; the monitor only speeds Git up.
-  // Replace refs could make Git read different objects than the ones recorded.
-  const result = await runProcess({ command: ["git", "-c", "core.fsmonitor=false", ...args], cwd: root, env: { GIT_NO_REPLACE_OBJECTS: "1" }, timeoutMs: 10000, maxOutputBytes: 2_000_000 });
+  // Replace refs could make Git read different objects than the ones recorded. No transport may start (for example a
+  // lazy fetch through a promisor remote and its sshCommand). Paths are fingerprinted, so stdout is never redacted.
+  const result = await runProcess({ command: ["git", "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", ...args], cwd: root,
+    env: { GIT_NO_REPLACE_OBJECTS: "1", GIT_ALLOW_PROTOCOL: "", GIT_NO_LAZY_FETCH: "1" }, timeoutMs: 10000, maxOutputBytes: 2_000_000, rawStdout: true });
   if (result.status !== "exited" || result.exitCode !== 0) {
     const operation = redact(["git", ...args].join(" ")).slice(0, 500);
     const cwd = redact(root).slice(0, 500);
@@ -28,7 +30,7 @@ export async function repositoryFiles(root: string, config: string[] = []): Prom
  * (fsmonitor, clean/process filters) or change how Git reads bytes (global attributes file). No config is written.
  */
 async function inertConfig(root: string): Promise<string[]> {
-  const listed = await runProcess({ command: ["git", "config", "--name-only", "--get-regexp", "^filter\\..*\\.(process|smudge|clean|required)$"], cwd: root, timeoutMs: 10000, maxOutputBytes: 2_000_000 });
+  const listed = await runProcess({ command: ["git", "config", "--name-only", "--get-regexp", "^filter\\..*\\.(process|smudge|clean|required)$"], cwd: root, timeoutMs: 10000, maxOutputBytes: 2_000_000, rawStdout: true });
   if (listed.status !== "exited" || (listed.exitCode !== 0 && listed.exitCode !== 1)) throw new Error("Git operation failed: filter configuration listing");
   const config = ["-c", "core.fsmonitor=false", "-c", `core.attributesFile=${join(tmpdir(), `salem-no-attributes-${randomUUID()}`)}`];
   for (const key of listed.stdout.split(/\r?\n/).filter(Boolean)) {

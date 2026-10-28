@@ -3,6 +3,8 @@ import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 export interface ProcessInput { command: string[]; cwd: string; input?: string; env?: Record<string, string>; timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; leaseDir?: string;
+  /** Keep stdout unredacted, for integrity reads (paths, hashes) that are never displayed; stderr stays redacted. */
+  rawStdout?: boolean;
   /**
    * Test seam, Windows owned runs only: absolute path of the containment helper
    * build to launch instead of the release helper next to windows-job.ts. Tests
@@ -75,7 +77,7 @@ export async function runProcess(input: ProcessInput): Promise<ProcessResult> {
     proc.on("error", e => { status = "failed"; error = redact(e.message); });
     proc.on("close", exitCode => {
       clearTimeout(timer); input.signal?.removeEventListener("abort", abort);
-      resolve({ status, exitCode, error, stdout: redact(Buffer.concat(stdout).toString("utf8")), stderr: redact(Buffer.concat(stderr).toString("utf8")) });
+      resolve({ status, exitCode, error, stdout: input.rawStdout ? Buffer.concat(stdout).toString("utf8") : redact(Buffer.concat(stdout).toString("utf8")), stderr: redact(Buffer.concat(stderr).toString("utf8")) });
     });
     proc.stdin.end(input.input ?? "");
   });
