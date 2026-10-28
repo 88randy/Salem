@@ -81,3 +81,52 @@ test("verified copies and imports retain researched origin and cannot silently s
  await f.store.saveProject({...f.project,name:"Later profile"});const executions=new ExecutionManager(f.store,{autoStart:false});await assert.rejects(executions.start(copied.id,"stale-copy"),/cambi|revisi/i);await executions.shutdown();
  }finally{await m.shutdown();}
 });
+async function settle(m:{isActive(id:string):boolean},id:string){const end=Date.now()+60000;while(m.isActive(id)&&Date.now()<end)await new Promise(r=>setTimeout(r,20));assert.equal(m.isActive(id),false);}
+test("a cancel accepted after the goal is claimed but before it is investigating prevents the agent from starting",async()=>{
+ const f=await fixture(),{GoalManager}=await import("../src/local/goals.js"),m=new GoalManager(f.store,{autoStart:false});await m.initialize();
+ let release!:()=>void;const gate=new Promise<void>(r=>{release=r;}),patch=f.store.patchGoal.bind(f.store);f.store.patchGoal=async(id:string,p:Partial<GoalRecord>,rev?:number)=>{if(p.status==="investigating")await gate;return patch(id,p,rev);};
+ try{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"claimed"});m.wake();const end=Date.now()+10000;while(!m.isActive(g.id)&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.ok(m.isActive(g.id));
+ const requested=await m.cancel(g.id);release();await settle(m,g.id);const done=await f.store.findGoal(g.id);assert.equal(done.status,"cancelled",`cancel returned ${requested.status}; goal ended ${done.status}`);assert.equal(done.plan,null);assert.notEqual(done.attempts.at(-1)?.status,"succeeded");}finally{release();await m.shutdown();}
+});
+test("cancelling an investigating goal with no registered agent is never a silent no-op",async()=>{
+ const f=await fixture(),{GoalManager}=await import("../src/local/goals.js"),m=new GoalManager(f.store,{autoStart:false});await m.initialize();
+ try{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"orphan"});await f.store.patchGoal(g.id,{status:"investigating",attempts:[{id:"00000000-0000-4000-8000-000000000001",startedAt:Date.now(),finishedAt:null,status:"running",error:null,usage:null,sessionId:null,durationMs:null}]});
+ const c=await m.cancel(g.id);assert.equal(c.status,"cancelled");assert.ok(c.finishedAt);assert.match(c.reason??"",/cancel/i);assert.equal(c.attempts[0]!.status,"cancelled");assert.equal((await f.store.findGoal(g.id)).status,"cancelled");}finally{await m.shutdown();}
+});
+test("goal cancel follows its status table: waiting goals cancel, cancelled is idempotent, finished goals refuse with 409",async()=>{
+ const f=await fixture(),{GoalManager}=await import("../src/local/goals.js"),m=new GoalManager(f.store,{autoStart:false});await m.initialize();
+ try{let n=0;const goal=async(status:GoalRecord["status"])=>{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:`table-${n++}`});return status==="queued"?g:f.store.patchGoal(g.id,{status});};
+ for(const status of ["queued","needs_input","ready"] as const){const g=await goal(status),c=await m.cancel(g.id);assert.equal(c.status,"cancelled",status);assert.ok(c.finishedAt,status);assert.match(c.reason??"",/cancel/i,status);}
+ const twice=await goal("queued"),first=await m.cancel(twice.id),second=await m.cancel(twice.id);assert.equal(second.status,"cancelled");assert.equal(second.revision,first.revision);
+ for(const status of ["failed","blocked","interrupted","materialized","answered"] as const){const g=await goal(status);await assert.rejects(m.cancel(g.id),(e:Error&{status?:number})=>e.status===409&&e.message.includes(status),status);assert.equal((await f.store.findGoal(g.id)).status,status);}
+ for(const status of ["failed","materialized","answered","ready"] as const){const g=await goal(status);assert.equal((await m.halt(g.id)).status,status,`halt leaves ${status}`);}
+ }finally{await m.shutdown();}
+});
+test("cancelling a registered investigation aborts it and reports the pending shutdown; a repeat cancel stays pending",async()=>{
+ const f=await fixture("wait"),{GoalManager}=await import("../src/local/goals.js"),m=new GoalManager(f.store);await m.initialize();
+ try{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"pending"});await until(f.store,g.id,["investigating"]);
+ const first=await m.cancel(g.id),second=await m.cancel(g.id);for(const c of [first,second]){assert.match(c.reason??"",/esperando el cierre del agente/);assert.equal(c.cancelRequested,true);}
+ await settle(m,g.id);const done=await f.store.findGoal(g.id);assert.equal(done.status,"cancelled",done.reason??"");
+ const again=await m.retry(g.id,done.revision);assert.equal(again.status,"queued");assert.equal(again.cancelRequested,false);await until(f.store,g.id,["investigating"]);await m.cancel(g.id);await settle(m,g.id);}finally{await m.shutdown();}
+});
+test("a cancel pending at restart is honored instead of replayed or reported as an interruption",async()=>{
+ const f=await fixture(),{GoalManager}=await import("../src/local/goals.js"),m=new GoalManager(f.store,{autoStart:false});await m.initialize();
+ const queued=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"restart-queued"}),running=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"restart-running"});
+ await f.store.patchGoal(queued.id,{cancelRequested:true});await f.store.patchGoal(running.id,{status:"investigating",cancelRequested:true});await m.shutdown();
+ const reopened=new GoalManager(new LocalStore(f.store.root),{autoStart:false});await reopened.initialize();
+ try{for(const id of [queued.id,running.id]){const g=await f.store.findGoal(id);assert.equal(g.status,"cancelled");assert.equal(g.cancelRequested,false);assert.ok(g.finishedAt);}}finally{await reopened.shutdown();}
+});
+test("a queued goal cancels immediately while its provider account is connecting",async()=>{
+ const f=await fixture(),{GoalManager}=await import("../src/local/goals.js");let connecting=false;const m=new GoalManager(f.store,{autoStart:false,canStart:()=>!connecting});await m.initialize();
+ try{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"connecting"});connecting=true;m.wake();await new Promise(r=>setTimeout(r,150));assert.equal(m.isActive(g.id),false);assert.equal((await f.store.findGoal(g.id)).status,"queued");const c=await m.cancel(g.id);assert.equal(c.status,"cancelled");connecting=false;m.wake();await new Promise(r=>setTimeout(r,150));assert.equal((await f.store.findGoal(g.id)).status,"cancelled");assert.equal(m.isActive(g.id),false);}finally{await m.shutdown();}
+});
+test("halting an apparently orphaned investigation keeps a result that completed while the lease was checked",async()=>{
+ const f=await fixture(),{GoalManager}=await import("../src/local/goals.js"),m=new GoalManager(f.store,{autoStart:false});await m.initialize();
+ try{const g=await m.start({projectId:f.project.id,objective:"Suma",agentId:"claude",requestKey:"orphan-race"}),attempt={id:"00000000-0000-4000-8000-000000000002",startedAt:Date.now(),finishedAt:null,status:"running" as const,error:null,usage:null,sessionId:null,durationMs:null};
+ await f.store.patchGoal(g.id,{status:"investigating",attempts:[attempt]});
+ // Simulate execute() persisting its result during the lease check that follows the stale read.
+ const internal=m as unknown as {refreshLeaseState(goal:GoalRecord):Promise<string|null>},refresh=internal.refreshLeaseState.bind(m);
+ internal.refreshLeaseState=async goal=>{const problem=await refresh(goal);await f.store.patchGoal(g.id,{status:"ready",finishedAt:Date.now(),attempts:[{...attempt,status:"succeeded",finishedAt:Date.now()}]});return problem;};
+ const h=await m.halt(g.id),saved=await f.store.findGoal(g.id);
+ assert.equal(h.status,"ready");assert.equal(saved.status,"ready");assert.equal(saved.attempts[0]!.status,"succeeded");}finally{await m.shutdown();}
+});

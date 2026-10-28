@@ -23,6 +23,8 @@ export type GoalStatus = "queued" | "investigating" | "ready" | "needs_input" | 
 export interface GoalRecord {
   conversational?: boolean;
   baseExecutionId?:string;
+  /** Set while a cancel waits for the claimed agent to stop; honored on restart. */
+  cancelRequested?: boolean;
   id: string; revision: number; projectId: string; requestKey: string; objective: string; agentId: string;
   project: ProjectRecord; sourceSha: string | null; status: GoalStatus;
   createdAt: number; updatedAt: number; finishedAt: number | null; reason: string | null;
