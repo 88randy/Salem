@@ -174,7 +174,7 @@ export async function startLocalServer(options: LocalServerOptions) {
           }
           json(response, 200, await manager!.detail(id)); return;
         }
-        if (/^\/api\/accounts\/[^/]+\/(?:check|connect|cancel|disconnect|input)$/.test(path) || ["/api/settings", "/api/projects", "/api/tasks", "/api/executions", "/api/projects/demo", "/api/projects/validate", "/api/projects/branches"].includes(path) || /^\/api\/executions\/[^/]+\/(?:cancel|resume)$/.test(path)) throw localError("Esta acción requiere un método de mutación.", 405);
+        if (/^\/api\/accounts\/[^/]+\/(?:check|connect|cancel|disconnect|input)$/.test(path) || ["/api/settings", "/api/projects", "/api/tasks", "/api/executions", "/api/projects/demo", "/api/projects/demo/plan", "/api/projects/validate", "/api/projects/branches"].includes(path) || /^\/api\/executions\/[^/]+\/(?:cancel|resume)$/.test(path)) throw localError("Esta acción requiere un método de mutación.", 405);
         throw localError("Ruta de API no encontrada.", 404);
       }
       const input = await body(request);
@@ -201,7 +201,19 @@ export async function startLocalServer(options: LocalServerOptions) {
       }
       if (path === "/api/projects") { json(response, 200, await store.saveProject(input as unknown as ProjectInput)); return; }
       if (path === "/api/tasks") { json(response, 200, await store.saveTask(input as unknown as TaskInput)); return; }
-      if (path === "/api/projects/demo") { json(response, 200, await (await import("./demo.js")).createLocalDemo(store)); return; }
+      if (path === "/api/projects/demo/plan") {
+        record(input, ["provider"]); const selected = input.provider === undefined ? undefined : provider(localText(input.provider, "proveedor", 20));
+        // Readiness comes from fresh CLI status probes; they never run inference.
+        await Promise.all((["claude", "codex"] as const).map(p => accounts!.check(p)));
+        json(response, 200, (await import("./demo.js")).planLocalDemo(accounts!.list(), (await store.readState()).settings, selected)); return;
+      }
+      if (path === "/api/projects/demo") {
+        record(input, ["provider", "roles"]); const selected = input.provider === undefined ? undefined : provider(localText(input.provider, "proveedor", 20));
+        if (input.roles === undefined) throw localError("Confirma el aviso de consumo antes de crear la demo.");
+        const demo = await import("./demo.js"), plan = demo.planLocalDemo(accounts!.list(), (await store.readState()).settings, selected);
+        if (!demo.sameRoles(plan.roles, input.roles)) throw localError("La disponibilidad de las cuentas cambió. Revisa de nuevo el aviso de consumo.", 412);
+        json(response, 200, await demo.createLocalDemo(store, plan.roles)); return;
+      }
       if (path === "/api/projects/validate") {
         try { json(response, 200, await parseProjectConfig(input.config)); }
         catch (error) { throw localError(redact(error instanceof Error ? error.message : "Configuración inválida.")); } return;
