@@ -63,7 +63,7 @@ export async function discoverProject(repoRoot:string,settings:LocalSettings,pro
   const ruffFiles:string[]=[];
   if(pyproject!==null&&/ruff/i.test(pyproject)&&await localFile("pyproject.toml"))ruffFiles.push("pyproject.toml");
   if(requirements!==null&&/ruff/i.test(requirements)&&await localFile("requirements.txt"))ruffFiles.push("requirements.txt");
-  ruffFiles.push(...ruffConfigs);if(ruffFiles.length)checks.push({id:"ruff",command:["python","-m","ruff","check","."],required:true,toolFiles:ruffFiles});
+  ruffFiles.push(...ruffConfigs);if(ruffFiles.length)checks.push({id:"ruff",command:["python","-m","ruff","check","--no-fix","--no-fix-only","."],required:true,toolFiles:ruffFiles});
  }
  if(set.has("Cargo.toml")){stack.push("Rust");checks.push({id:"cargo-test",command:["cargo","test"],required:true,toolFiles:["Cargo.toml"]});}
  if(set.has("go.mod")){stack.push("Go");checks.push({id:"go-test",command:["go","test","./..."],required:true,toolFiles:["go.mod"]});}

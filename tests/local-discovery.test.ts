@@ -43,7 +43,7 @@ for(const [file,content,label] of [
  ["pyproject.toml","[tool.poetry.dependencies]\nruff = '^0.9'\n","Poetry dependency"],["pyproject.toml","[project]\ndescription = 'ruff notes'\n","accepted unrelated string false positive"]
 ])test(`discovery proposes ruff from ${label}`,async()=>{
  const f=await fixture();await writeFile(join(f.repo,"README.md"),"# Python\n");await writeFile(join(f.repo,file!),content!);await f.commit();const result=await(await discovery())(f.repo,defaultSettings(),"codex",f.data);
- assert.deepEqual(result.stack,["Python"]);assert.deepEqual(result.suggested.config.checks,[{id:"ruff",command:["python","-m","ruff","check","."],required:true,toolFiles:[file]}]);await parseProjectConfig(result.suggested.config);
+ assert.deepEqual(result.stack,["Python"]);assert.deepEqual(result.suggested.config.checks,[{id:"ruff",command:["python","-m","ruff","check","--no-fix","--no-fix-only","."],required:true,toolFiles:[file]}]);await parseProjectConfig(result.suggested.config);
 });
 test("discovery combines Django, pytest and every ruff marker without duplicate checks",async()=>{
  const f=await fixture();for(const [file,content] of Object.entries({"manage.py":"raise RuntimeError('must not run')\n","pyproject.toml":"[project]\ndependencies = ['pytest', 'ruff']\n[tool.ruff.lint]\nselect = ['E']\n","requirements.txt":"pytest\nruff\n","ruff.toml":"line-length = 88\n",".ruff.toml":"line-length = 88\n"}))await writeFile(join(f.repo,file),content);await f.commit();const result=await(await discovery())(f.repo,defaultSettings(),"codex",f.data),checks=result.suggested.config.checks;
@@ -85,4 +85,9 @@ test("proposed Django checks are executable checks, not discovery-only dry runs"
  // The check runner classifies any argv containing --dry-run as discovery-only, which can never pass.
  const discoveryOnly=["--dry-run","--collect-only","--listTests","--list-tests","--help","--version"];
  for(const id of ["django-check"])assert.ok(!checks.find(c=>c.id===id)!.command.some(a=>discoveryOnly.includes(a)),id);
+});
+test("the proposed ruff check cannot autofix or report success in fix-only mode",async()=>{
+ const f=await fixture();await writeFile(join(f.repo,"ruff.toml"),"fix = true\nfix-only = true\n");await f.commit();const ruff=(await(await discovery())(f.repo,defaultSettings(),"codex",f.data)).suggested.config.checks.find(c=>c.id==="ruff")!;
+ // Project config can enable fix/fix-only: fix mutates the worktree and fix-only exits 0 despite remaining violations.
+ assert.ok(ruff.command.includes("--no-fix")&&ruff.command.includes("--no-fix-only"));assert.ok(!ruff.command.some(a=>a==="--fix"||a==="--fix-only"));
 });
