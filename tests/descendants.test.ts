@@ -147,3 +147,52 @@ test("windows: a helper killed right after creating the gate leaves no gate and 
     await pending?.catch(() => {});
   }
 });
+
+// Cancellation must always settle in bounded time. When the job cannot be shown
+// empty (termination reports survivors, fails, never answers, or the launch never
+// settles), the guardian gives up the tree by closing the helper (kill-on-close)
+// and exits without a receipt: the lease stays open and new work stays blocked.
+const settleWithin = <T>(pending: Promise<T>, ms: number) => Promise.race([pending, new Promise<null>(resolve => { setTimeout(resolve, ms, null).unref(); })]);
+const assertUnconfirmed = async (dir: string, pending: ReturnType<typeof run>) => {
+  const result = await settleWithin(pending, 20000);
+  assert.ok(result, "cancellation never settled");
+  assert.equal(result.status, "failed", result.error ?? ""); assert.match(result.error ?? "", /cleanup receipt/);
+  assert.equal((await lease(dir)).closed, false, "an unconfirmed cleanup must not close the lease");
+};
+// Releases a guardian left hanging by a failing run (its helper and gate are its descendants).
+const release = async (dir: string) => {
+  const host = (await lease(dir).catch(() => ({ pid: 0 }))).pid as number;
+  if (host && alive(host)) await runProcess({ command: ["taskkill.exe", "/PID", String(host), "/T", "/F"], cwd: dir, timeoutMs: 5000, maxOutputBytes: 1000 });
+};
+for (const fault of ["active", "error", "silent"] as const) {
+  test(`windows: cancel settles without a receipt when job termination answers ${fault}`, windows, async () => {
+    const dir = await tree(), c = new AbortController();
+    process.env.SALEM_TEST_JOB_HELPER_TERMINATE = fault;
+    const pending = run(dir, "stay", { signal: c.signal });
+    try {
+      await spawned(dir);
+      c.abort();
+      await assertUnconfirmed(dir, pending);
+    } finally {
+      delete process.env.SALEM_TEST_JOB_HELPER_TERMINATE;
+      await release(dir); await pending.catch(() => {}); await kill(dir);
+    }
+  });
+}
+
+test("windows: cancel while the launch is pending settles without a receipt and leaves no gate", windows, async () => {
+  const dir = await tree(), marker = join(dir, "paused.txt"), c = new AbortController();
+  process.env.SALEM_TEST_JOB_HELPER_PAUSE_FILE = marker;
+  const pending = run(dir, "stay", { signal: c.signal });
+  try {
+    for (let i = 0; i < 300 && !existsSync(marker); i++) await delay(50);
+    const gate = Number((await readFile(marker, "utf8")).split(" ")[1]);
+    c.abort();
+    await assertUnconfirmed(dir, pending);
+    for (let i = 0; i < 40 && alive(gate); i++) await delay(50);
+    assert.equal(alive(gate), false, `gate ${gate} survived a cancelled launch`);
+  } finally {
+    delete process.env.SALEM_TEST_JOB_HELPER_PAUSE_FILE;
+    await release(dir); await pending.catch(() => {});
+  }
+});

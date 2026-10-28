@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { atomicJson } from "./state-store.js";
-import { WindowsJob } from "./windows-job.js";
+import { WindowsJob, controlDeadlineMs } from "./windows-job.js";
 const [leaseFile, token] = process.argv.slice(2);
 const windows = process.platform === "win32";
 type Start = { type: string; command: string[]; cwd: string; timeoutMs: number; env?: Record<string, string> };
@@ -20,19 +20,27 @@ let started = false;
 let stopping = false;
 let finishing = false;
 let timer: NodeJS.Timeout | undefined;
+let launchDeadline: NodeJS.Timeout | undefined;
+let abandoned = false; // the tree could not be proven empty: no receipt, ever
 let killerDone: Promise<void> = Promise.resolve();
 // Windows: before a launch request no gate exists; from then on only the job can prove the tree is empty.
 const confirmEmpty = async (): Promise<boolean> => !contained || (job ? job.terminate() : false);
+// Bounded give-up: closing the helper closes the job handle, so kill-on-close ends
+// whatever is still inside; the receipt is withheld and the lease stays open.
 function unconfirmed(): void {
-  finishing = true; process.exitCode = 1; clearTimeout(timer);
+  if (abandoned) return;
+  abandoned = true; finishing = true; process.exitCode = 1; clearTimeout(timer); clearTimeout(launchDeadline);
+  job?.close();
   process.stderr.write("Process tree cleanup could not be confirmed", () => { if (process.connected) process.disconnect(); process.exit(1); });
 }
 async function finish(code: number): Promise<void> {
   if (finishing) return; finishing = true; stopping = true; clearTimeout(timer);
   await killerDone;
+  if (abandoned) return;
   // The child has its own group; clean remaining members on normal POSIX exit.
   if (!windows && child?.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already empty */ } }
   const clean = !windows || await confirmEmpty();
+  if (abandoned) return;
   job?.close();
   if (!clean) { unconfirmed(); return; }
   try {
@@ -44,12 +52,19 @@ async function finish(code: number): Promise<void> {
 function stop(): void {
   if (stopping) return; stopping = true;
   if (windows) {
-    if (contained) killerDone = job!.terminate().then(() => {}); // the gate exit then settles the run
-    else if (!launching) void finish(1); // startContained finishes once the pending launch settles
+    if (contained) terminateOrAbandon(); // a confirmed-empty job then lets the gate exit settle the run
+    // A pending launch gets a bounded wait; then the helper is closed, the launch
+    // fails, and startContained settles through the job (unconfirmed if it cannot answer).
+    else if (launching) launchDeadline = setTimeout(() => { if (launching) job!.close(); }, controlDeadlineMs);
+    else void finish(1);
     return;
   }
   if (!child?.pid) { void finish(1); return; }
   try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+}
+// Termination that reports survivors, fails or does not answer in time gives the tree up.
+function terminateOrAbandon(): void {
+  killerDone = job!.terminate().then(ok => { if (!ok) unconfirmed(); });
 }
 function pipe(stdin: Writable, stdout: Readable, stderr: Readable): void {
   process.stdin.pipe(stdin); stdout.pipe(process.stdout); stderr.pipe(process.stderr);
@@ -73,10 +88,10 @@ async function startContained(message: Start): Promise<void> {
     // the gate) is settled by the job, never assumed: `cleaned` is sent only if the
     // live helper confirms the job is empty. Otherwise the receipt is withheld and
     // new work stays blocked.
-    launching = false; contained = true;
+    launching = false; contained = true; clearTimeout(launchDeadline);
     process.stderr.write((e as Error).message); void finish(1); return;
   }
-  launching = false; contained = true;
+  launching = false; contained = true; clearTimeout(launchDeadline);
   // Run settles when the gate has exited and every holder of its output pipes is gone.
   const drained = (stream: Readable) => new Promise<void>(resolve => { stream.once("close", resolve); });
   pipe(gate.stdin, gate.stdout, gate.stderr);
@@ -85,7 +100,7 @@ async function startContained(message: Start): Promise<void> {
     void gate.terminate().then(ok => { if (!ok && !finishing) unconfirmed(); });
   });
   void Promise.all([gate.gateExit, drained(gate.stdout), drained(gate.stderr)]).then(([code]) => finish(code ?? 1));
-  if (stopping) { killerDone = gate.terminate().then(() => {}); return; }
+  if (stopping) { terminateOrAbandon(); return; }
   gate.send({ command: message.command, cwd: message.cwd, env: { ...process.env, ...message.env } }, e => { if (e) stop(); });
 }
 process.on("disconnect", stop);

@@ -80,7 +80,14 @@ static class WindowsJobHelper {
           Thread waiter = Launch(Decode(parts[1]), Decode(parts[2]), Decode(parts[3]));
           waiter.Start(); // after "started": the "exit" event always follows the reply
         }
-        else if (line == "terminate") Write("active " + Terminate());
+        else if (line == "terminate") {
+          // Test-only fault injection: "active" (job not emptied), "error", or
+          // "silent" (no reply), without touching the job.
+          string fault = Environment.GetEnvironmentVariable("SALEM_TEST_JOB_HELPER_TERMINATE");
+          if (fault == "active") Write("active 1");
+          else if (fault == "error") Write("error injected terminate failure");
+          else if (fault != "silent") Write("active " + Terminate());
+        }
         else Write("error unknown request");
       } catch (Exception e) { Write("error " + e.Message); }
     }

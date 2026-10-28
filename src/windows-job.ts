@@ -21,6 +21,8 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
+/** Longest wait for a helper answer that a run's settlement depends on (its own terminate waits up to 5 s). */
+export const controlDeadlineMs = 8000;
 const helperPath = fileURLToPath(new URL("./windows-job-helper.exe", import.meta.url));
 const b64 = (value: string) => Buffer.from(value, "utf8").toString("base64");
 // The gate command is node.exe plus a script path: plain quoting is exact for paths.
@@ -79,8 +81,15 @@ export class WindowsJob {
   }
   /** Sends one IPC message to the gate. */
   send(message: unknown, callback: (error: Error | null) => void): void { this.helper.send(message as object, callback); }
-  /** Terminates every process in the job; true only when the job is confirmed empty. */
-  async terminate(): Promise<boolean> { return (await this.reply("terminate")) === "active 0"; }
+  /**
+   * Terminates every process in the job; true only when the job is confirmed empty.
+   * Survivors, an error, or no answer within `deadlineMs` all yield false.
+   */
+  async terminate(deadlineMs = controlDeadlineMs): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<string>(resolve => { timer = setTimeout(resolve, deadlineMs, "error no answer"); });
+    try { return (await Promise.race([this.reply("terminate"), late])) === "active 0"; } finally { clearTimeout(timer); }
+  }
   /** Ends the helper; closing its job handle kills anything still inside. */
   close(): void { this.helper.stdin!.end(); this.helper.kill(); if (this.helper.connected) this.helper.disconnect(); }
 }
