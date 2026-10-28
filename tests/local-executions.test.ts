@@ -91,6 +91,27 @@ test("a forged index stat cache cannot hide a changed file from the diff or patc
  }finally{await f.m.shutdown();}
 });
 
+test("core.ignoreStat cannot hide a modified tracked file from the patch",async()=>{
+ const f=await diffFixture();
+ try{
+  const {localPatch}=await import("../src/local/git.js"),sha=(await f.store.findExecution(f.e.id)).sourceSha!;
+  await writeFile(join(f.workspace,"tracked.txt"),"modified\n");await writeFile(join(f.workspace,"brand-new.txt"),"new\n");
+  await git(f.workspace,"config","--local","core.ignoreStat","true");
+  const patch=(await localPatch(f.workspace,sha,f.store.root)).toString("utf8");
+  assert.match(patch,/\+modified/);assert.match(patch,/\+new/);
+ }finally{await f.m.shutdown();}
+});
+
+test("an embedded repository is refused instead of exported as a bare reference",async()=>{
+ const f=await diffFixture();
+ try{
+  const {localPatch}=await import("../src/local/git.js"),sha=(await f.store.findExecution(f.e.id)).sourceSha!,inner=join(f.workspace,"inner");
+  await mkdir(inner);await git(inner,"init","-q");await writeFile(join(inner,"file.txt"),"inside\n");await git(inner,"add","file.txt");
+  await git(inner,"-c","user.name=Test","-c","user.email=test@example.invalid","commit","-q","-m","inner");
+  await assert.rejects(localPatch(f.workspace,sha,f.store.root),(error:Error&{status?:number})=>error.status===409);
+ }finally{await f.m.shutdown();}
+});
+
 test("snapshots cannot be forged by moving bytes between files",async()=>{
  const f=await diffFixture();
  try{

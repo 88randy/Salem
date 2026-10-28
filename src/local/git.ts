@@ -23,7 +23,8 @@ export async function localGit(root:string,args:string[],systemDir:string,option
  */
 async function neutralConversions(root:string,systemDir:string,scratch:string):Promise<string[]>{
  // protocol.allow=never also stops a lazy fetch (promisor remote) from starting a transport such as core.sshCommand.
- const overrides=["-c",`core.attributesFile=${join(scratch,"no-attributes")}`,"-c","protocol.allow=never"];
+ // core.ignoreStat=true would mark rebuilt entries as unchanged (CE_VALID) and hide edits.
+ const overrides=["-c",`core.attributesFile=${join(scratch,"no-attributes")}`,"-c","protocol.allow=never","-c","core.ignoreStat=false"];
  for(const key of (await localGit(root,["config","--name-only","--get-regexp","^filter\\..*\\.(process|smudge|clean|required)$"],systemDir,{allowMissing:true})).split(/\r?\n/).filter(Boolean)){
   if(!/^filter\.[A-Za-z0-9._/-]+\.(?:process|smudge|clean|required)$/.test(key))throw localError("Filtro Git incompatible con una exportación sin scripts.",409);
   overrides.push("-c",`${key}=${key.endsWith(".required")?"false":""}`);
@@ -46,6 +47,9 @@ export async function localDiff(root:string,sourceSha:string,systemDir:string,sh
    if(entries)await git(["update-index","-z","--index-info"],{input:entries.endsWith("\0")?entries:`${entries}\0`});
   }else await git(["read-tree","HEAD"]);
   await git(["add","--intent-to-add","--all","--"]);
+  // An embedded repository becomes a gitlink: the patch would carry a bare reference and lose its files.
+  if((await git(["ls-files","--stage","-z"],{maxOutputBytes:INDEX_LISTING_LIMIT,raw:true})).split("\0").some(entry=>entry.startsWith("160000 ")))
+   throw localError("La copia contiene un repositorio Git dentro de otro; su contenido no se puede incluir en el cambio exportado.",409);
   return await git([...(shape.config??[]).flatMap(entry=>["-c",entry]),"diff","--no-ext-diff","--no-textconv",...(shape.args??[]),sourceSha,"--"]);
  }finally{await rm(directory,{recursive:true,force:true});}
 }
