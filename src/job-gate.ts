@@ -1,6 +1,7 @@
-// Windows launch gate. The guardian assigns this process to its Job Object and
-// only then sends the command, so the agent and every descendant are created
-// inside the job; nothing can start before containment exists.
+// Windows launch gate. windows-job-helper.exe creates this process suspended,
+// assigns it to the guardian's Job Object by its creation handle and resumes it;
+// the guardian sends the command over the inherited IPC channel only after that.
+// The agent and every descendant are therefore created inside the job.
 import { spawn } from "node:child_process";
 
 process.once("message", (raw: unknown) => {

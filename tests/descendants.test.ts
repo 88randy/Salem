@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { alive, acquireLock } from "../src/state-store.js";
 import { runProcess } from "../src/process.js";
+import { WindowsJob } from "../src/windows-job.js";
+import { spawn } from "node:child_process";
 
 // The agent starts two detached grandchildren that escape libuv's job: one
 // inherits (and holds) the agent's stdout/stderr pipes, one ignores stdio.
@@ -65,7 +67,7 @@ test("windows: an unconfirmable tree cleanup withholds the receipt and keeps new
     await spawned(dir);
     const host = (await lease(dir)).pid;
     // Kill the containment helper: the guardian can no longer prove the tree is empty.
-    const query = `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${host} and Name=''powershell.exe''' | ForEach-Object { $_.ProcessId }`;
+    const query = `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${host} and Name=''windows-job-helper.exe''' | ForEach-Object { $_.ProcessId }`;
     const found = await runProcess({ command: ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query], cwd: dir, timeoutMs: 15000, maxOutputBytes: 1000 });
     const helper = Number(found.stdout.trim().split(/\s+/)[0]);
     assert.ok(helper > 0, `containment helper not found: ${found.stdout} ${found.stderr}`);
@@ -77,4 +79,44 @@ test("windows: an unconfirmable tree cleanup withholds the receipt and keeps new
     await writeFile(join(path, "owner.json"), JSON.stringify({ pid: 2147483647, token: "old", runId: "old", leaseDir }));
     await assert.rejects(acquireLock(path, "new"), /guardian|cleanup|unconfirmed/i);
   } finally { await pending.catch(() => {}); await kill(dir); }
+});
+
+// PID-reuse class: containment must never target a process chosen by PID, or a
+// recycled PID could pull an unrelated process into the job (and kill it later).
+test("windows: the containment helper refuses PID-based assignment, so a bystander is never pulled into the job", windows, async () => {
+  const bystander = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore", windowsHide: true });
+  const job = WindowsJob.start();
+  try {
+    await job.ready;
+    const request = (job as unknown as { reply(line: string): Promise<string> }).reply.bind(job);
+    assert.notEqual(await request(`assign ${bystander.pid}`), "ok", "the helper accepted a PID to contain");
+    assert.equal(await job.terminate(), true);
+    await delay(200);
+    assert.equal(alive(bystander.pid!), true, "terminating the job killed a process that was only named by PID");
+  } finally { job.close(); bystander.kill(); }
+});
+
+test("windows: the helper creates the gate inside the job before it runs and reports its exit", windows, async () => {
+  const dir = await tree(), job = WindowsJob.start();
+  try {
+    await job.ready;
+    const exits = await job.launch(process.execPath, ["-e", "process.exit(7)"], dir);
+    assert.ok(exits > 0);
+    assert.equal(await job.gateExit, 7);
+  } finally { job.close(); }
+  const second = WindowsJob.start();
+  try {
+    await second.ready;
+    const pid = await second.launch(process.execPath, ["-e", "setInterval(()=>{},1000)"], dir);
+    assert.equal(alive(pid), true);
+    assert.equal(await second.terminate(), true, "the job did not report the launched gate as its member");
+    assert.equal(await second.gateExit, 1);
+    assert.equal(alive(pid), false, "terminating the job did not end the launched gate");
+    await assert.rejects(second.launch(process.execPath, ["-e", ""], dir), /already started/);
+  } finally { second.close(); }
+});
+
+test("windows: a missing containment helper fails closed", windows, async () => {
+  const dir = await tree(), job = WindowsJob.start(join(dir, "missing-helper.exe"));
+  try { await assert.rejects(job.ready, /containment unavailable/); } finally { job.close(); }
 });
