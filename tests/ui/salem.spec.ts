@@ -143,3 +143,17 @@ test('a high-risk execution explains in one plain sentence why another AI review
  await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();await page.getByRole('button',{name:'Ver ejecución'}).click();
  await expect(page.getByText(explanation,{exact:true})).toBeVisible();
 });
+test('packages the registry could not confirm are named in plain words',async({page})=>{
+ const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'demo',repoRoot:'C:/demo',contextFiles:[],agents:{builder:{provider:'codex',command:['codex']}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
+ const spec={id:'DEPS-1',objective:'Agregar paquete',scope:['package.json'],acceptance:['Instala'],references:[]};
+ const execution={id:'e',revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,status:'completed',reason:null,project,task:spec,workspace:'C:/worktree',sourceSha:'abc123',runId:'run-1',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[]};
+ const review={id:'a',stage:'review',agentId:'builder',startedAt:1,finishedAt:2,valid:true,artifactDir:'x',result:{stage:'review',status:'succeeded',payload:{summary:'Revisado',evidenceRefs:[],findings:[],verdict:'success'},dependencies:[{name:'left-pad',ecosystem:'npm',status:'found',registry:''},{name:'slow-pkg',ecosystem:'npm',status:'unknown',registry:''}]}};
+ const state={schemaVersion:1,revision:1,settings,projects:[project],tasks:[],executions:[execution]};
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(u.pathname==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/state')return r.fulfill({json:{state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/executions/e')return r.fulfill({json:{execution,metrics:null,diff:'',artifacts:[],run:{id:'run-1',status:'completed',attempts:[review],history:[],checks:[],acceptance:null,validation:null,delivery:null,deliveryJournal:null}}});
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();await page.getByRole('button',{name:'Ver ejecución'}).click();
+ await expect(page.getByText('No se pudo comprobar en internet si existe este paquete nuevo: slow-pkg. La revisión lo indica como un límite.',{exact:true})).toBeVisible();
+});

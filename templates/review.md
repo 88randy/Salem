@@ -36,9 +36,12 @@ critical o important. Un fallo en 5 o 6 se reporta como hallazgo minor y no
 bloquea por sí solo, salvo que sea critical. Ordena los findings con esta prioridad.
 
 ## Código generado por IA
-- ¿Existen las librerías? Verifica en su registro cada nombre de
-  NEW_DEPENDENCIES_JSON: los modelos inventan paquetes plausibles. Un paquete
-  inexistente o sin verificar es un fallo de correct.
+- ¿Existen las librerías? Los modelos inventan paquetes plausibles. El
+  supervisor ya consultó el registro público de cada paquete nuevo y deja el
+  recibo en NEW_DEPENDENCIES_JSON: found existe; not_found es un fallo de correct
+  con un hallazgo critical; unknown significa que no se pudo consultar: no es un
+  fallo automático, decláralo como limitación en summary con palabras sencillas
+  (por ejemplo, "No se pudo comprobar en internet si existe el paquete X").
 - ¿La versión es la nuestra? Busca sintaxis o APIs de otra versión mayor.
 - ¿Sigue los patrones del repositorio?
 - ¿Maneja errores, no solo el camino feliz?

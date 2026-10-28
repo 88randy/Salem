@@ -13,6 +13,7 @@ import {evaluateAcceptance,evaluateChecks} from '../acceptance.js';
 import {localGit} from './git.js';
 import {localError} from './validation.js';
 import {redact} from '../process.js';
+import {classifyRisk,singleProviderQuestion} from '../review-policy.js';
 
 export const promotionWorking=(e:EvolutionRecord)=>!!e.promotion&&['queued','preparing','applying','verifying','rolling_back'].includes(e.promotion.status);
 export function queuedPromotion():EvolutionPromotion{return {status:'queued',reason:'Aplicación local en cola.',createdAt:Date.now(),updatedAt:Date.now(),root:'',gitDir:'',head:'',indexHash:'',baseTreeHash:'',candidateTreeHash:'',entries:[],checks:[],acceptance:null};}
@@ -33,8 +34,10 @@ export async function validatePromotion(store:LocalStore,e:EvolutionRecord){
  const baseSnapshot=await repositorySnapshot(base),snapshot=await repositorySnapshot(candidate);
  if(baseSnapshot.treeHash!==e.seal.baseTreeHash||snapshot.treeHash!==e.seal.candidateTreeHash||snapshot.head!==e.sourceSha||baseSnapshot.head!==e.sourceSha)throw localError('El árbol de evidencia de la candidata cambió.',409);
  for(const change of patch.changes)if(!(await file(candidate,change.path)).bytes.equals(Buffer.from(change.content)))throw localError('Los bytes de la candidata no coinciden con el parche revisado.',409);
+ // Re-check risk from the recorded diff: a high-risk repair needs a review from a provider other than the builder's.
+ const risk=classifyRisk(e.task,e.diff,[e.review.payload?.risk]);if(risk.level==='high'&&e.review.provider===e.project.config.agents[e.agentId]?.provider)throw localError(singleProviderQuestion(risk),409);
  const toolHashes:Record<string,string>={};for(const c of e.project.config.checks)toolHashes[c.id]=await checkToolHash(c.command,candidate,c.toolFiles);
- const config={...e.project.config,repoRoot:candidate},fingerprint=digest({policyHash:e.policyHash,snapshot}),proof=await evaluateAcceptance(e.task,e.candidateChecks,e.review,{config,snapshot,fingerprint,evidenceRoot:await artifact(store,e,'candidate-checks'),implementationSessionId:e.patch.sessionId,toolHashes});
+ const config={...e.project.config,repoRoot:candidate},fingerprint=digest({policyHash:e.policyHash,snapshot}),proof=await evaluateAcceptance(e.task,e.candidateChecks,e.review,{config,snapshot,fingerprint,evidenceRoot:await artifact(store,e,'candidate-checks'),implementationSessionId:e.patch.sessionId,toolHashes,implementationProvider:e.project.config.agents[e.agentId]?.provider??null,risk});
  const review=JSON.parse(await readFile(await artifact(store,e,'review','result.json'),'utf8'));if(!proof.accepted||digest(review)!==digest(e.review))throw localError('La evidencia de aceptación o revisión perdió su integridad.',409);
  const baselineConfig={...e.project.config,repoRoot:base},baseline=await evaluateChecks(e.task,e.baseline,{config:baselineConfig,snapshot:baseSnapshot,fingerprint:digest({config:baselineConfig,snapshot:baseSnapshot}),evidenceRoot:await artifact(store,e,'baseline-checks'),implementationSessionId:null,toolHashes});
  if(baseline.accepted||!baseline.retryable||!e.baseline.some(b=>b.status==='failed'&&b.failureKind==='code'&&e.candidateChecks.some(c=>c.checkId===b.checkId&&c.status==='passed')))throw localError('No hay evidencia íntegra de un fallo original reparado.',409);

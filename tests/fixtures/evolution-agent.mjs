@@ -21,7 +21,7 @@ if(input.includes('GOAL_JSON=')){
  if(mode==='change-wrapper')writeFileSync(new URL(import.meta.url),'// changed external authority\n');
 }else{
  const task=JSON.parse(input.match(/TASK_JSON=(.+)/)[1]);payload={schemaVersion:1,stage:task.stage,taskId:task.id,verdict:mode==='badreview'?'needs_changes':'success',summary:'Revisión de fixture',evidenceRefs:['sum.mjs'],findings:mode==='badreview'?[{severity:'important',description:'Regresión'}]:[]};
- if(task.stage==='review')Object.assign(payload,{rubric:Object.fromEntries(['solves','correct','secure','tested','understandable','style'].map(k=>[k,{pass:true,notes:''}])),risk:{level:'normal',reasons:[]}});
+ if(task.stage==='review')Object.assign(payload,{rubric:Object.fromEntries(['solves','correct','secure','tested','understandable','style'].map(k=>[k,{pass:true,notes:''}])),risk:mode==='risky'?{level:'high',reasons:['La reparación cambia una comprobación de permisos']}:{level:'normal',reasons:[]}});
 }
 if(provider==='codex'){writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(payload));console.log(JSON.stringify({type:'thread.started',thread_id:randomUUID()}));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:3,cached_input_tokens:0}}));}
 else console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,structured_output:payload,session_id:randomUUID(),usage:{input_tokens:10,output_tokens:3,cache_read_input_tokens:mode==='cache-budget'?900:0,...(mode==='unknown-cache'?{}:{cache_creation_input_tokens:0})},total_cost_usd:0.001}));

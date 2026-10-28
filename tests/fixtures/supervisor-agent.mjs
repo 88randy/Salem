@@ -15,7 +15,8 @@ if (mode === 'wait' && task.stage === 'build' && !existsSync(trace + '.release')
 }
 if (task.stage === 'build') writeFileSync('answer.txt', existsSync('answer.txt') ? 'corrected\n' : 'implemented\n');
 if (task.stage === 'build' && mode === 'auth-diff') { mkdirSync('auth', { recursive: true }); writeFileSync('auth/permissions.mjs', 'export const canEdit = user => user.role === "owner";\n'); }
-if (task.stage === 'build' && mode === 'invented-package') writeFileSync('package.json', JSON.stringify({ name: 'demo', dependencies: { 'left-pad': '1.3.0', 'reqeusts-turbo-ai': '^2.1.0' } }, null, 2));
+if (task.stage === 'build' && mode === 'invented-package') writeFileSync('package.json', JSON.stringify({ name: 'demo', dependencies: { 'left-pad': '1.3.0', 'reqeusts-turbo-ai': '^2.1.0', 'slow-registry-pkg': '1.0.0' } }, null, 2));
+if (task.stage === 'build' && mode === 'remove-auth') writeFileSync('orders.js', readFileSync('orders.js', 'utf8').replace('  await authenticate(req);\n', ''));
 let verdict = 'success';
 if (mode === 'rework' && task.stage === 'review' && readFileSync('answer.txt', 'utf8') !== 'corrected\n') verdict = 'needs_changes';
 const payload = { schemaVersion: 1, stage: task.stage, taskId: task.id, verdict, summary: verdict === 'needs_changes' ? 'Correct answer.txt' : 'Fixture stage done', evidenceRefs: ['answer.txt'], findings: verdict === 'needs_changes' ? [{ severity: 'important', description: 'Correct answer.txt' }] : [] };
@@ -26,8 +27,9 @@ if (task.stage === 'review') {
   if (mode === 'no-rubric' && reviews === 1) delete payload.rubric.secure;
   if (mode === 'security' && readFileSync('answer.txt', 'utf8') !== 'corrected\n') payload.rubric.secure = { pass: false, notes: 'Expone datos de otros usuarios' };
   if (mode === 'style') { payload.rubric.style = { pass: false, notes: 'Nombre poco claro' }; payload.findings = [{ severity: 'minor', description: 'Renombrar answer.txt' }]; }
-  // Stands in for a registry lookup: only left-pad exists.
-  const added = JSON.parse(input.match(/^NEW_DEPENDENCIES_JSON=(.+)$/m)?.[1] ?? '[]'), invented = added.filter(n => n !== 'left-pad');
+  // Acts only on the supervisor's registry receipts, as the template instructs.
+  const added = JSON.parse(input.match(/^NEW_DEPENDENCIES_JSON=(.+)$/m)?.[1] ?? '[]'), invented = added.filter(d => d.status === 'not_found').map(d => d.name), unknown = added.filter(d => d.status === 'unknown').map(d => d.name);
+  if (unknown.length) payload.summary += `. No se pudo comprobar si existen: ${unknown.join(', ')}`;
   if (invented.length) { payload.verdict = 'needs_changes'; payload.rubric.correct = { pass: false, notes: 'Paquete inexistente' }; payload.findings = [{ severity: 'critical', description: `Paquete inexistente en el registro: ${invented.join(', ')}` }]; }
 }
 if (claude) console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: payload, session_id: randomUUID(), usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0 }, total_cost_usd: 0.001 }));

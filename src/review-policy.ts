@@ -1,4 +1,4 @@
-import type { ProjectConfig, RiskAssessment, RubricItem, RunState, StagePayload, StageResult, TaskSpec } from "./contracts.js";
+import type { DependencyReceipt, ProjectConfig, RiskAssessment, RubricItem, RunState, StagePayload, StageResult, TaskSpec } from "./contracts.js";
 import { inspectAgent } from "./doctor.js";
 
 // Priority order: a failure in the first four blocks acceptance; the last two only report.
@@ -16,37 +16,56 @@ const authCode = /\b(permission_classes|login_required|IsAuthenticated|authentic
 const dataPath = /(^|\/)(migrations?|alembic)\/|\.sql$|(^|\/)(schema\.prisma|models\.py)$/i;
 const destructive = /\b(DROP\s+(TABLE|COLUMN|SCHEMA|DATABASE)|TRUNCATE\b|DELETE\s+FROM|RemoveField|DeleteModel|dropTable|dropColumn|drop_table|drop_column|remove_column)/i;
 
-/** Splits a review diff into each file's added lines (all lines of untracked files). */
-export function addedLines(diff: string): { path: string; lines: string[] }[] {
-  const files: { path: string; lines: string[] }[] = []; let current: { path: string; lines: string[] } | null = null, untracked = false;
+/** Splits a review diff into each file's added and removed lines (all lines of untracked files are added). */
+export function changedLines(diff: string): { path: string; lines: string[]; removed: string[] }[] {
+  const files: { path: string; lines: string[]; removed: string[] }[] = []; let current: { path: string; lines: string[]; removed: string[] } | null = null, untracked = false;
   for (const line of diff.split(/\r?\n/)) {
     const tracked = /^diff --git a\/.+ b\/(.+)$/.exec(line), extra = /^UNTRACKED (".*")$/.exec(line);
-    if (tracked || extra) { current = { path: tracked ? tracked[1]! : JSON.parse(extra![1]!) as string, lines: [] }; untracked = !!extra; files.push(current); continue; }
+    if (tracked || extra) { current = { path: tracked ? tracked[1]! : JSON.parse(extra![1]!) as string, lines: [], removed: [] }; untracked = !!extra; files.push(current); continue; }
     if (!current) continue;
-    if (untracked) current.lines.push(line); else if (line.startsWith("+") && !line.startsWith("+++")) current.lines.push(line.slice(1));
+    if (untracked) current.lines.push(line);
+    else if (line.startsWith("+") && !line.startsWith("+++")) current.lines.push(line.slice(1));
+    else if (line.startsWith("-") && !line.startsWith("---")) current.removed.push(line.slice(1));
   }
   return files;
 }
-/** Package names a change adds to dependency files, so the reviewer verifies each one exists in its registry. */
-export function addedDependencies(diff: string): string[] {
-  const names = new Set<string>();
-  for (const file of addedLines(diff)) {
+export interface Dependency { name: string; ecosystem: DependencyReceipt["ecosystem"] }
+/** Packages a change adds to dependency files; the supervisor checks each one in its public registry. */
+export function addedDependencies(diff: string): Dependency[] {
+  const found = new Map<string, Dependency>(), add = (name: string, ecosystem: Dependency["ecosystem"]) => found.set(`${ecosystem}:${name}`, { name, ecosystem });
+  for (const file of changedLines(diff)) {
     const base = file.path.split("/").at(-1)!;
     if (base === "package.json") {
-      try { const json = JSON.parse(file.lines.join("\n")) as Record<string, unknown>; for (const k of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) if (json[k] && typeof json[k] === "object") Object.keys(json[k]).forEach(n => names.add(n)); continue; } catch { /* a hunk, not a whole file */ }
-      for (const l of file.lines) { const m = /^\s*"(@?[\w.\/-]+)"\s*:\s*"(?:[\^~<>=]*\s*\d|\*|latest|npm:|workspace:)/.exec(l); if (m) names.add(m[1]!); }
+      try { const json = JSON.parse(file.lines.join("\n")) as Record<string, unknown>; for (const k of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) if (json[k] && typeof json[k] === "object") Object.keys(json[k]).forEach(n => add(n, "npm")); continue; } catch { /* a hunk, not a whole file */ }
+      for (const l of file.lines) { const m = /^\s*"(@?[\w.\/-]+)"\s*:\s*"(?:[\^~<>=]*\s*\d|\*|latest|npm:|workspace:)/.exec(l); if (m) add(m[1]!, "npm"); }
     } else if (/^requirements.*\.txt$/i.test(base)) {
-      for (const l of file.lines) { const m = /^\s*([A-Za-z0-9][\w.-]*)(\[[^\]]*\])?\s*(==|>=|<=|~=|!=|>|<|$)/.exec(l); if (m) names.add(m[1]!); }
+      for (const l of file.lines) { const m = /^\s*([A-Za-z0-9][\w.-]*)(\[[^\]]*\])?\s*(==|>=|<=|~=|!=|>|<|$)/.exec(l); if (m) add(m[1]!, "pypi"); }
     }
   }
-  return [...names].sort();
+  return [...found.keys()].sort().map(k => found.get(k)!);
+}
+/** Public registries queried read-only and without credentials; tests point these at a local fake. */
+export const dependencyRegistries = { npm: "https://registry.npmjs.org/", pypi: "https://pypi.org/pypi/" };
+const validName = { npm: /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/i, pypi: /^[A-Za-z0-9][\w.-]*$/ };
+/** Receipts the reviewer can rely on: found / not_found from the registry, unknown on any other answer or network error. */
+export async function verifyDependencies(deps: Dependency[], signal?: AbortSignal, timeoutMs = 5000): Promise<DependencyReceipt[]> {
+  return Promise.all(deps.map(async (d, i): Promise<DependencyReceipt> => {
+    const registry = !validName[d.ecosystem].test(d.name) || i >= 50 ? "" : d.ecosystem === "npm" ? dependencyRegistries.npm + d.name.replace("/", "%2f") : `${dependencyRegistries.pypi}${encodeURIComponent(d.name)}/json`;
+    if (!registry) return { ...d, status: "unknown", registry };
+    try {
+      const res = await fetch(registry, { headers: { accept: "application/json" }, signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]) });
+      await res.body?.cancel();
+      return { ...d, status: res.status === 200 ? "found" : res.status === 404 ? "not_found" : "unknown", registry };
+    } catch { return { ...d, status: "unknown", registry }; }
+  }));
 }
 /** Deterministic risk floor from the spec and, at review time, the diff. Agents may raise it, never lower it. */
 export function classifyRisk(task: TaskSpec, diff = "", claimed: (RiskAssessment | null | undefined)[] = []): RiskAssessment & { explanation: string } {
   const found = new Set<string>(), text = [task.objective, ...task.scope, ...task.acceptance].join("\n");
   for (const [rule, reason] of specRules) if (rule.test(text)) found.add(reason);
-  for (const file of addedLines(diff)) {
-    if (authPath.test(file.path) || file.lines.some(l => authCode.test(l))) found.add(reasons.auth);
+  for (const file of changedLines(diff)) {
+    // Deleting an access check is as risky as adding one.
+    if (authPath.test(file.path) || [...file.lines, ...file.removed].some(l => authCode.test(l))) found.add(reasons.auth);
     if (dataPath.test(file.path)) { found.add(reasons.data); if (file.lines.some(l => destructive.test(l))) found.add(reasons.destructive); }
   }
   const known = [...found], other = claimed.flatMap(r => r?.level === "high" ? r.reasons : []);

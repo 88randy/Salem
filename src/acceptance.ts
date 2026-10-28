@@ -37,7 +37,7 @@ export async function evaluateAcceptance(task: TaskSpec, evidence: CheckEvidence
   if (!Array.isArray(review.payload?.findings) || review.payload.findings.some(f => !f || f.severity !== "minor" || typeof f.description !== "string" || !f.description.trim())) result.reasons.push("Review has blocking or missing structured findings");
   if (review.repoSha !== context.snapshot.head || review.verificationFingerprint !== context.fingerprint) result.reasons.push("Review is for another repository version/fingerprint");
   for (const item of rubricBlocks(review.payload)) result.reasons.push(`Review rubric fails: ${item}`);
-  if ((context.risk?.level === "high" || review.payload?.risk?.level === "high") && context.implementationProvider && review.provider === context.implementationProvider) result.reasons.push("High-risk change requires review by another provider");
+  if ((context.risk?.level === "high" || review.payload?.risk?.level === "high") && (!context.implementationProvider || review.provider === context.implementationProvider)) result.reasons.push("High-risk change requires review by another provider");
   result.accepted = result.reasons.length === 0;
   return result;
 }

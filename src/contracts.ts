@@ -42,6 +42,7 @@ export interface StagePayload {
 }
 export type RubricItem = "solves" | "correct" | "secure" | "tested" | "understandable" | "style";
 export interface RiskAssessment { level: "normal" | "high"; reasons: string[] }
+export interface DependencyReceipt { name: string; ecosystem: "npm" | "pypi"; status: "found" | "not_found" | "unknown"; registry: string }
 export interface Usage {
   inputTokens: number | null; outputTokens: number | null; cachedInputTokens: number | null;
   costUsd: number | null; costKind: "reported" | "estimated" | "unavailable";
@@ -101,5 +102,7 @@ export interface StageResult {
   exitCode: number | null; usage: Usage; durationMs: number; artifactDir: string;
   repoSha: string | null;
   verificationFingerprint?: string;
+  /** Registry receipts for packages the reviewed change adds. */
+  dependencies?: DependencyReceipt[];
   failureKind?: "infrastructure" | "protocol" | "policy" | "unknown" | null;
 }
