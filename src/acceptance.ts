@@ -1,7 +1,8 @@
-import type { ProjectConfig, RepositorySnapshot, TaskSpec, CheckEvidence, StageResult, AcceptanceResult } from "./contracts.js";
+import type { ProjectConfig, RepositorySnapshot, TaskSpec, CheckEvidence, StageResult, AcceptanceResult, RiskAssessment } from "./contracts.js";
 import { digest } from "./state-store.js";
 import { verifyCheck, checkToolHash } from "./checks.js";
-export interface AcceptanceContext { config: ProjectConfig; snapshot: RepositorySnapshot; fingerprint: string; evidenceRoot: string; implementationSessionId: string | null; toolHashes?: Record<string, string> }
+import { rubricBlocks } from "./review-policy.js";
+export interface AcceptanceContext { config: ProjectConfig; snapshot: RepositorySnapshot; fingerprint: string; evidenceRoot: string; implementationSessionId: string | null; toolHashes?: Record<string, string>; implementationProvider?: string | null; risk?: RiskAssessment | null }
 export async function evaluateChecks(task: TaskSpec, evidence: CheckEvidence[], context: AcceptanceContext): Promise<AcceptanceResult & { retryable: boolean }> {
   const reasons: string[] = [], passed = new Set<string>(), codeFailures = new Set<string>(), checkIds: string[] = [];
   let retryable = true;
@@ -35,6 +36,8 @@ export async function evaluateAcceptance(task: TaskSpec, evidence: CheckEvidence
   if (!review.sessionId || !context.implementationSessionId || review.sessionId === context.implementationSessionId) result.reasons.push("Review must use a separate session from implementation");
   if (!Array.isArray(review.payload?.findings) || review.payload.findings.some(f => !f || f.severity !== "minor" || typeof f.description !== "string" || !f.description.trim())) result.reasons.push("Review has blocking or missing structured findings");
   if (review.repoSha !== context.snapshot.head || review.verificationFingerprint !== context.fingerprint) result.reasons.push("Review is for another repository version/fingerprint");
+  for (const item of rubricBlocks(review.payload)) result.reasons.push(`Review rubric fails: ${item}`);
+  if ((context.risk?.level === "high" || review.payload?.risk?.level === "high") && context.implementationProvider && review.provider === context.implementationProvider) result.reasons.push("High-risk change requires review by another provider");
   result.accepted = result.reasons.length === 0;
   return result;
 }

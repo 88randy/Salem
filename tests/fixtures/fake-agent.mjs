@@ -18,6 +18,7 @@ else {
   for await (const chunk of process.stdin) input += chunk;
   const task = JSON.parse(input.match(/TASK_JSON=(.+)/)?.[1] ?? '{}');
   const payload = { schemaVersion: 1, stage: task.stage, taskId: task.id, verdict: 'success', summary: 'fixture result', evidenceRefs: ['AGENTS.md'], findings: [] };
+  if (task.stage === 'review') Object.assign(payload, { rubric: Object.fromEntries(['solves', 'correct', 'secure', 'tested', 'understandable', 'style'].map(k => [k, { pass: true, notes: '' }])), risk: { level: 'normal', reasons: [] } });
   if (mode === 'smoke' || mode === 'prefix') {
     payload.summary = readFileSync('AGENTS.md', 'utf8').match(/CONTEXTO-[A-Za-z0-9-]+/)?.[0] ?? 'no marker';
     if (mode === 'prefix') payload.summary = payload.summary.slice(0, -3);

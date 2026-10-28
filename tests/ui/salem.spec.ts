@@ -130,3 +130,16 @@ test('accepted executions download the binary patch and show export errors',asyn
  expect(file.suggestedFilename()).toBe('salem-11111111.patch');expect(Buffer.compare(await readFile((await file.path())!),bytes)).toBe(0);
  await page.getByRole('button',{name:'Descargar parche'}).click();await expect(page.getByText('La copia aislada ya no existe; no se puede exportar el parche.')).toBeVisible();expect(patches).toBe(2);
 });
+test('a high-risk execution explains in one plain sentence why another AI reviews it',async({page})=>{
+ const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'demo',repoRoot:'C:/demo',contextFiles:[],agents:{builder:{provider:'codex',command:['codex']}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
+ const spec={id:'LOGIN-1',objective:'Agregar inicio de sesión',scope:['auth.js'],acceptance:['Inicia sesión'],references:[]},explanation='Este cambio toca el inicio de sesión o los permisos, por eso lo revisa una IA distinta de la que lo hizo antes de aceptarlo.';
+ const execution={id:'e',revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,status:'completed',reason:null,project,task:spec,workspace:'C:/worktree',sourceSha:'abc123',runId:'run-1',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[]};
+ const state={schemaVersion:1,revision:1,settings,projects:[project],tasks:[],executions:[execution]};
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(u.pathname==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/state')return r.fulfill({json:{state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/executions/e')return r.fulfill({json:{execution,metrics:null,diff:'',artifacts:[],run:{id:'run-1',status:'completed',attempts:[],history:[],checks:[],acceptance:null,validation:null,delivery:null,deliveryJournal:null,risk:{level:'high',reasons:['el inicio de sesión o los permisos'],explanation}}}});
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();await page.getByRole('button',{name:'Ver ejecución'}).click();
+ await expect(page.getByText(explanation,{exact:true})).toBeVisible();
+});

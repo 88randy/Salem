@@ -21,6 +21,7 @@ if(input.includes('GOAL_JSON=')){
   else if(task.id.endsWith('-types')){if(!readFileSync('sum.mjs','utf8').includes('Suma dos números'))throw Error('Missing predecessor code');writeFileSync('sum.mjs','// Suma dos números; rechaza otros tipos.\nexport function sum(a,b){if(typeof a!=="number"||typeof b!=="number")throw new TypeError("Solo números");return a+b;}\n');}
  }
  payload={schemaVersion:1,stage:task.stage,taskId:task.id,verdict:'success',summary:'Resultado de fixture; los checks reales deciden.',evidenceRefs:['sum.mjs'],findings:[]};
+ if(task.stage==='review')Object.assign(payload,{rubric:Object.fromEntries(['solves','correct','secure','tested','understandable','style'].map(k=>[k,{pass:true,notes:''}])),risk:{level:'normal',reasons:[]}});
  if(task.stage==='review'&&task.id.endsWith('-types')){
   const history=JSON.parse(input.match(/^ACCEPTED_PREDECESSOR_EVIDENCE_JSON=(.+)$/m)?.[1]??'[]');
   if(history.length!==2||history.some(r=>!r.acceptance?.accepted||!r.integrity?.instructionsHash||r.review?.sessionId===r.implementation?.sessionId||!r.checks.some(c=>c.checkId==='sum'&&c.status==='passed'))){payload.verdict='needs_changes';payload.summary='Falta evidencia histórica de los pasos anteriores.';payload.findings=[{severity:'important',description:payload.summary}];}

@@ -16,6 +16,7 @@ if(task.stage==='build'){
   if(task.id==='REFACTOR-STATS')writeFileSync('stats.mjs','export function stats(values){let total=0,min=null,max=null;for(const v of values){total+=v;min=min===null?v:Math.min(min,v);max=max===null?v:Math.max(max,v);}return {count:values.length,total,min,max};}\n');
 }
 const payload={schemaVersion:1,stage:task.stage,taskId:task.id,verdict:'success',summary:'Fixture only, not LLM performance',evidenceRefs:task.scope,findings:[]};
+if(task.stage==='review')Object.assign(payload,{rubric:Object.fromEntries(['solves','correct','secure','tested','understandable','style'].map(k=>[k,{pass:true,notes:''}])),risk:{level:'normal',reasons:[]}});
 writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(payload));
 console.log(JSON.stringify({type:'thread.started',thread_id:randomUUID(),model:'fixture'}));
 console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5,cached_input_tokens:0}}));
