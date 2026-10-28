@@ -5,6 +5,7 @@ import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {createManifest,verifyPackage,safePath} from './windows/manager.mjs';
 import {filesAt,assertBuildFresh,sourceSnapshot} from './windows/build-inputs.mjs';
+import {download} from './windows/download.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -19,7 +20,6 @@ if(process.platform!=='win32'||process.arch!=='x64')throw new Error('Este empaqu
 if(!/^22\.\d+\.\d+$/.test(options.nodeVersion))throw new Error('Se requiere una versión oficial Node.js 22.');
 function command(exe,args){const result=spawnSync(exe,args,{cwd:root,encoding:'utf8',windowsHide:true,maxBuffer:10*1024*1024});if(result.status!==0)throw new Error(result.stderr||result.stdout||result.error?.message||`Falló ${exe}`);return result.stdout.trim();}
 function ps(script){return command('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')]);}
-async function download(url,file){try{return await readFile(file);}catch(e){if(e.code!=='ENOENT')throw e;}const response=await fetch(url);if(!response.ok)throw new Error(`HTTP ${response.status}: ${url}`);const bytes=Buffer.from(await response.arrayBuffer());await writeFile(file,bytes);return bytes;}
 const packageJson=JSON.parse(await readFile(join(root,'package.json'),'utf8'));
 if(!options.provisional)await assertBuildFresh(root);
 const sourceInputsBefore=await sourceSnapshot(root);
@@ -30,8 +30,7 @@ const runtimeFile=`node-v${options.nodeVersion}-win-x64.zip`,runtimeUrl=`https:/
 const sums=await download(runtimeUrl+'SHASUMS256.txt',join(cache,`v${options.nodeVersion}-SHASUMS256.txt`));
 const checksum=sums.toString('utf8').split(/\r?\n/).map(s=>s.trim().split(/\s+/)).find(a=>a[1]===runtimeFile)?.[0];
 if(!checksum||!/^[a-f0-9]{64}$/.test(checksum))throw new Error('No se encontró el checksum oficial del runtime.');
-const runtimeZip=join(cache,runtimeFile),runtimeBytes=await download(runtimeUrl+runtimeFile,runtimeZip);
-if(hash(runtimeBytes)!==checksum)throw new Error('El runtime Node.js no coincide con SHASUMS256.txt oficial.');
+const runtimeZip=join(cache,runtimeFile);await download(runtimeUrl+runtimeFile,runtimeZip,{verify:bytes=>{if(hash(bytes)!==checksum)throw new Error('El runtime Node.js no coincide con SHASUMS256.txt oficial.');}});
 const runtimeDir=join(cache,`node-v${options.nodeVersion}-win-x64`);
 try{await stat(join(runtimeDir,'node.exe'));}catch{ps(`Expand-Archive -LiteralPath ${quote(runtimeZip)} -DestinationPath ${quote(cache)} -Force`);}
 // Also verify the extracted executable against the official executable checksum.
