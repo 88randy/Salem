@@ -2,13 +2,23 @@
 
 Rules for contributors and coding agents (Claude Code, Codex, others) making a reviewable change to Salem. Human-facing contribution guidance is in [CONTRIBUTING.md](CONTRIBUTING.md); security reports follow [SECURITY.md](SECURITY.md).
 
+## Product principles
+
+Salem is for people who do not know, and should not need to know, any of the technology underneath (Git, branches, patches, CLIs, checks).
+
+- **Chat-first.** The user does, sees and asks for everything from the chat. Other UI only shows, in plain language, what happened.
+- **Independent by default.** Salem decides and acts on safe defaults instead of handing steps to the user. Example: an accepted change is applied to the project automatically, with undo (#50); a branch is created on its own only when applying would clash with the user's edits.
+- **Guide only when needed.** When Salem truly needs something only the user can give (signing in to an account, a choice that is theirs), it asks once in the chat and guides step by step in plain words.
+- **No jargon in the main path.** Technical details and manual tools live behind "Más opciones" or in docs, never in the default flow.
+- **Undo builds trust.** Anything Salem does to the user's project must be reversible from the chat.
+
 ## Stack
 
 - Node.js 22 (`engines: >=22 <23`), npm, Git. ESM only (`"type": "module"`).
 - TypeScript 5.9 with `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`; `NodeNext` modules, so relative imports in `.ts` end in `.js`.
 - Core in `src/` and `tests/` compiles to `dist/`. The UI in `ui/` is React 19 built with Vite; UI tests use Playwright.
 - Build and release scripts in `scripts/` are plain `.mjs`. Dependencies are pinned to exact versions.
-- CI (`.github/workflows/ci.yml`) runs only on `windows-latest`.
+- CI (`.github/workflows/ci.yml`) runs on `windows-latest` (full suite, UI tests and packaging) and `ubuntu-latest` (typecheck and core tests).
 
 ## Commands
 
