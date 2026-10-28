@@ -160,3 +160,10 @@ test("makemigrations options that exit 0 without verifying never escape the disc
     assert.equal(isDiscoveryOnly([...base, ...extra]), true, extra.join(" "));
   assert.equal(isDiscoveryOnly([...base, "billing", "accounts"]), false);
 });
+
+test("Django shell completion in the environment keeps the makemigrations exception from applying", () => {
+  const command = ["python", "manage.py", "makemigrations", "--check", "--dry-run"];
+  assert.equal(isDiscoveryOnly(command, {}), false);
+  // With DJANGO_AUTO_COMPLETE set, Django prints completions and exits 0 without checking migrations.
+  assert.equal(isDiscoveryOnly(command, { DJANGO_AUTO_COMPLETE: "1", COMP_WORDS: "manage.py makemigrations --check --dry-run", COMP_CWORD: "3" }), true);
+});

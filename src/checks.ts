@@ -58,12 +58,14 @@ const DISCOVERY_FLAGS = ["--dry-run", "--collect-only", "--listTests", "--list-t
 // `--dry-run` and app labels are allowed after it: options such as --merge, --empty or
 // argparse abbreviations (-h, --hel, --vers) exit 0 without verifying. Interpreter flags,
 // other manage.py paths, `python -m django` and `django-admin` stay discovery-only.
-export function isDiscoveryOnly(command: readonly string[]): boolean {
+// Django exits 0 before running any command when DJANGO_AUTO_COMPLETE is set (shell completion),
+// so the exception never applies while it is present in the environment checks inherit.
+export function isDiscoveryOnly(command: readonly string[], env: NodeJS.ProcessEnv = process.env): boolean {
   if (!command.some(arg => DISCOVERY_FLAGS.includes(arg))) return false;
   const program = basename(command[0] ?? "").replace(/\.exe$/i, "").toLowerCase(), rest = command.slice(3);
   const migrationsCheck = /^python(?:\d+(?:\.\d+)*)?$/.test(program) && command[1] === "manage.py" && command[2] === "makemigrations"
     && rest.includes("--check") && rest.includes("--dry-run") && rest.every(arg => arg === "--check" || arg === "--dry-run" || /^[A-Za-z_][A-Za-z0-9_]*$/.test(arg));
-  return !migrationsCheck;
+  return !migrationsCheck || env.DJANGO_AUTO_COMPLETE !== undefined;
 }
 export async function runChecks(config: ProjectConfig, sha: string, options: CheckOptions = {}): Promise<CheckEvidence[]> {
   const snapshot = options.snapshot ?? await repositorySnapshot(config.repoRoot);
