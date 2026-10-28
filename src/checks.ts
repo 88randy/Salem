@@ -54,13 +54,15 @@ export async function verifyCheck(evidence: CheckEvidence, root: string): Promis
 const DISCOVERY_FLAGS = ["--dry-run", "--collect-only", "--listTests", "--list-tests", "--help", "--version"];
 // Acceptance-policy guard: listing/simulating commands cannot produce passing evidence.
 // The one exception is Django's `python manage.py makemigrations ... --check ... --dry-run`,
-// which verifies (non-zero on missing migrations) and writes nothing. Interpreter flags,
-// other manage.py paths, `--`, `python -m django` and `django-admin` stay discovery-only.
+// which verifies (non-zero on missing migrations) and writes nothing. Only `--check`,
+// `--dry-run` and app labels are allowed after it: options such as --merge, --empty or
+// argparse abbreviations (-h, --hel, --vers) exit 0 without verifying. Interpreter flags,
+// other manage.py paths, `python -m django` and `django-admin` stay discovery-only.
 export function isDiscoveryOnly(command: readonly string[]): boolean {
   if (!command.some(arg => DISCOVERY_FLAGS.includes(arg))) return false;
   const program = basename(command[0] ?? "").replace(/\.exe$/i, "").toLowerCase(), rest = command.slice(3);
   const migrationsCheck = /^python(?:\d+(?:\.\d+)*)?$/.test(program) && command[1] === "manage.py" && command[2] === "makemigrations"
-    && rest.includes("--check") && rest.includes("--dry-run") && !rest.some(arg => arg === "--" || (arg !== "--dry-run" && DISCOVERY_FLAGS.includes(arg)));
+    && rest.includes("--check") && rest.includes("--dry-run") && rest.every(arg => arg === "--check" || arg === "--dry-run" || /^[A-Za-z_][A-Za-z0-9_]*$/.test(arg));
   return !migrationsCheck;
 }
 export async function runChecks(config: ProjectConfig, sha: string, options: CheckOptions = {}): Promise<CheckEvidence[]> {

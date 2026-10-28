@@ -123,7 +123,7 @@ test("ambiguous interpreter options require declared tool inputs and then pin th
 test("only Django makemigrations --check --dry-run escapes the discovery-only guard", () => {
   const migrate = ["manage.py", "makemigrations", "--check", "--dry-run"];
   for (const command of [["python", ...migrate], ["python3", ...migrate], ["python3.12", ...migrate], ["C:\\Py\\python.exe", ...migrate], ["/usr/bin/python3", ...migrate],
-    ["python", "manage.py", "makemigrations", "--dry-run", "--check"], ["python", "manage.py", "makemigrations", "app", "--check", "--dry-run", "--settings=site.settings"]])
+    ["python", "manage.py", "makemigrations", "--dry-run", "--check"], ["python", "manage.py", "makemigrations", "app", "--check", "--dry-run"]])
     assert.equal(isDiscoveryOnly(command), false, command.join(" "));
   for (const command of [["python", "manage.py", "makemigrations", "--dry-run"], ["python", "manage.py", "migrate", "--check", "--dry-run"], ["python", "manage.py", "makemigrations", "--check", "--dry-run", "--help"],
     ["python", "manage.py", "makemigrations", "--check", "--dry-run", "--version"], ["python", "manage.py", "makemigrations", "--", "--check", "--dry-run"], ["python", "-W", "error", ...migrate],
@@ -151,4 +151,12 @@ test("makemigrations --check --dry-run runs; pending migrations fail without cha
   await git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "add migration");
   const clean = await repositorySnapshot(repo), passed = await runChecks(f.config, clean.head, { ...f, snapshot: clean });
   assert.deepEqual([passed[0]?.status, passed[0]?.execution, passed[0]?.exitCode, passed[0]?.failureKind], ["passed", "actual", 0, null]);
+});
+
+test("makemigrations options that exit 0 without verifying never escape the discovery-only guard", () => {
+  const base = ["python", "manage.py", "makemigrations", "--check", "--dry-run"];
+  // --merge and --empty return before applying --check; argparse accepts unambiguous prefixes of help/version.
+  for (const extra of [["--merge"], ["--empty", "app"], ["-h"], ["--help"], ["--hel"], ["--vers"], ["--version"], ["--settings=x"], ["-v", "2"], ["--"], ["--noinput"]])
+    assert.equal(isDiscoveryOnly([...base, ...extra]), true, extra.join(" "));
+  assert.equal(isDiscoveryOnly([...base, "billing", "accounts"]), false);
 });
