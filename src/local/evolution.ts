@@ -9,6 +9,7 @@ import {runStage} from '../adapters/index.js';
 import {digest} from '../state-store.js';
 import {redact} from '../process.js';
 import {usageBudgetReason} from '../metrics.js';
+import {classifyRisk,singleProviderQuestion} from '../review-policy.js';
 import type {Provider} from './contracts.js';
 import type {EvolutionRecord,EvolutionRequest,EvolutionStatus,EvolutionIncident} from './evolution-contracts.js';
 import {LocalStore} from './store.js';
@@ -103,8 +104,12 @@ export class EvolutionManager {
    const context={config,snapshot,fingerprint,evidenceRoot:checksRoot,implementationSessionId:proposal.sessionId,toolHashes},checks=await evaluateChecks(e.task,e.candidateChecks,context);
    if(!checks.accepted){await patch({status:'no_improvement',acceptance:checks,reason:checks.reasons.join('; '),finishedAt:Date.now()});return;}
    await this.unchanged(e,signal);await patch({status:'reviewing'});const verification=await buildVerificationContext(config,snapshot,fingerprint,e.candidateChecks,signal,leaseDir);await patch({diff:verification.diff});
-   await infer();const review=await runStage({config,agentId:config.supervisor!.roles.review,stage:'review',task:e.task,artifactDir:await this.path(e.id,'review'),leaseDir,verification,disableHooks:true},signal);await patch({review});await assertEvolutionFiles(candidate.root,finalFiles,[],finalFiles);await this.unchanged(e,signal);
-   const acceptance=await evaluateAcceptance(e.task,e.candidateChecks,review,context);const improved=acceptance.accepted&&e.baseline.some(b=>b.status==='failed'&&b.failureKind==='code'&&e.candidateChecks.some(c=>c.checkId===b.checkId&&c.status==='passed'));
+   // The evolution's authority covers only its frozen builder and reviewer, so high risk needs those two to differ in provider.
+   const builder=config.agents[e.agentId]!.provider,sameProvider=config.agents[config.supervisor!.roles.review]!.provider===builder;let risk=classifyRisk(e.task,verification.diff);
+   if(risk.level==='high'&&sameProvider)throw localError(singleProviderQuestion(risk));
+   await infer();const review=await runStage({config,agentId:config.supervisor!.roles.review,stage:'review',task:e.task,artifactDir:await this.path(e.id,'review'),leaseDir,verification,disableHooks:true,risk:{level:risk.level,reasons:risk.reasons}},signal);await patch({review});await assertEvolutionFiles(candidate.root,finalFiles,[],finalFiles);await this.unchanged(e,signal);
+   risk=classifyRisk(e.task,verification.diff,[review.payload?.risk]);if(risk.level==='high'&&sameProvider)throw localError(singleProviderQuestion(risk));
+   const acceptance=await evaluateAcceptance(e.task,e.candidateChecks,review,{...context,implementationProvider:builder,risk});const improved=acceptance.accepted&&e.baseline.some(b=>b.status==='failed'&&b.failureKind==='code'&&e.candidateChecks.some(c=>c.checkId===b.checkId&&c.status==='passed'));
    await patch({acceptance,...(improved?{seal:{baseTreeHash:baseSnapshot.treeHash,candidateTreeHash:snapshot.treeHash,baseFiles,candidateFiles:finalFiles,patchHash:digest(proposal.patch)},...(e.applyOnSuccess?{promotion:queuedPromotion()}: {})}:{}),status:improved?'improved':'no_improvement',reason:improved?'Defecto reproducido y reparado con aceptación original y revisión independiente. Candidata conservada; sin instalación ni publicación.':acceptance.reasons.join('; ')||'No hay mejora comprobada.',finishedAt:Date.now()});
   }catch(error){await patch({status:signal.aborted?(expired?'blocked':'cancelled'):'blocked',reason:signal.aborted?(expired?'Presupuesto de tiempo agotado.':'Experimento cancelado; evidencia conservada.'):redact((error as Error).message),finishedAt:Date.now()});}
   finally{clearTimeout(timer);}

@@ -14,6 +14,7 @@ import { evaluateChecks, evaluateAcceptance, type AcceptanceContext } from "./ac
 import { buildVerificationContext } from "./review-context.js";
 import { deliver, deliveryToolsHash } from "./delivery.js";
 import { usageBudgetReason } from "./metrics.js";
+import { runRisk, crossProviderReviewer, buildProvider, singleProviderQuestion, invalidRubric, rubricBlocks } from "./review-policy.js";
 import type { AgentProvenance, BenchmarkContext } from "./metrics-contracts.js";
 export interface RunnerOptions {
   acceptedBase?: { state:RunState; config:ProjectConfig; evidenceRoot:string };
@@ -28,9 +29,9 @@ export async function verifyAcceptedBase(base:NonNullable<RunnerOptions['accepte
  const state=base.state,current=await repositorySnapshot(state.expected.root,options),target=await repositorySnapshot(root,options);
  if(state.status!=='completed'||digest(current)!==digest(state.expected)||current.head!==target.head||current.treeHash!==target.treeHash||current.dirty!==target.dirty||state.configHash!==digest(base.config)||state.instructionsHash!==await instructionsHash(base.config)||state.delivery?.verdict!=='success'||state.delivery.fingerprint!==runFingerprint(state))throw new Error('La base aceptada cambió o no tiene una entrega verificable.');
  const review=[...state.attempts].reverse().find(a=>a.stage==='review'&&a.valid)?.result;
- const implementationSessionId=[...state.attempts].reverse().find(a=>a.stage==='build'&&a.valid)?.result?.sessionId??null;
+ const implementation=[...state.attempts].reverse().find(a=>a.stage==='build'&&a.valid)?.result,implementationSessionId=implementation?.sessionId??null;
  if(!review||!state.acceptance?.accepted||state.acceptance.fingerprint!==runFingerprint(state))throw new Error('La base requiere aceptación y revisión independientes.');
- const accepted=await evaluateAcceptance(state.task,state.checks??[],review,{config:base.config,snapshot:current,fingerprint:runFingerprint(state),evidenceRoot:base.evidenceRoot,implementationSessionId,toolHashes:state.checkToolHashes??{}});
+ const accepted=await evaluateAcceptance(state.task,state.checks??[],review,{config:base.config,snapshot:current,fingerprint:runFingerprint(state),evidenceRoot:base.evidenceRoot,implementationSessionId,toolHashes:state.checkToolHashes??{},implementationProvider:implementation?.provider??null,risk:state.risk??null});
  if(!accepted.accepted)throw new Error('Pruebas de la base inválidas: '+accepted.reasons.join('; '));
 }
 export function runFingerprint(state: RunState): string {
@@ -127,7 +128,8 @@ function gateMatches(receipt: GateReceipt, state: RunState): boolean {
 }
 function acceptanceContext(store: StateStore, state: RunState, config: ProjectConfig): AcceptanceContext {
   const implementation = [...state.attempts].reverse().find(a => a.stage === "build" && a.result?.status === "succeeded");
-  return { config, snapshot: state.expected, fingerprint: runFingerprint(state), evidenceRoot: join(store.directory(state.id), "checks"), implementationSessionId: implementation?.result?.sessionId ?? null, toolHashes: state.checkToolHashes ?? {} };
+  return { config, snapshot: state.expected, fingerprint: runFingerprint(state), evidenceRoot: join(store.directory(state.id), "checks"), implementationSessionId: implementation?.result?.sessionId ?? null, toolHashes: state.checkToolHashes ?? {},
+    implementationProvider: implementation?.result?.provider ?? null, risk: state.risk ?? null };
 }
 async function validateCode(store: StateStore, state: RunState, config: ProjectConfig, signal: AbortSignal, options: RunnerOptions): Promise<GateReceipt> {
   const context = acceptanceContext(store, state, config);
@@ -212,13 +214,22 @@ async function drive(store: StateStore, state: RunState, config: ProjectConfig, 
         try { verification = await buildVerificationContext(config, before, runFingerprint(state), state.checks ?? [], controller.signal, join(store.directory(state.id), "leases")); }
         catch (e) { return change(store, state, "blocked", redact((e as Error).message), options); }
       }
-      const attempt = { id: randomUUID(), stage, agentId: config.supervisor!.roles[stage], startedAt: Date.now(), finishedAt: null as number | null,
+      let agentId = config.supervisor!.roles[stage];
+      if (stage === "review") {
+        state.risk = runRisk(state, verification?.diff);
+        if (state.risk.level === "high") {
+          const reviewer = await crossProviderReviewer(config, buildProvider(state, config), controller.signal, join(store.directory(state.id), "leases"));
+          if (!reviewer) return change(store, state, "blocked", singleProviderQuestion(state.risk), options);
+          agentId = reviewer; await change(store, state, "reviewing", state.risk.explanation, options);
+        }
+      }
+      const attempt = { id: randomUUID(), stage, agentId, startedAt: Date.now(), finishedAt: null as number | null,
         before, after: null as RunState["expected"] | null, artifactDir: "", result: null as RunState["attempts"][number]["result"], valid: false };
       attempt.artifactDir = join(store.directory(state.id), "stages", attempt.id);
       state.attempts.push(attempt); await save(store, state, options); // intent before launch
       const result = await runStage({ config: { ...config, budgets: { ...config.budgets, stageTimeoutMs: Math.max(1, Math.min(config.budgets.stageTimeoutMs, state.deadlineAt - Date.now())) } },
         agentId: attempt.agentId, stage, task: state.task, artifactDir: attempt.artifactDir,
-        leaseDir: join(store.directory(state.id), "leases"), priorStages: state.attempts.flatMap(a => a.result ? [a.result] : []), ...(options.predecessorEvidence?{predecessorEvidence:options.predecessorEvidence}:{}), ...(verification ? { verification } : {}) }, controller.signal);
+        leaseDir: join(store.directory(state.id), "leases"), priorStages: state.attempts.flatMap(a => a.result ? [a.result] : []), ...(options.predecessorEvidence?{predecessorEvidence:options.predecessorEvidence}:{}), ...(verification ? { verification } : {}), ...(stage === "review" && state.risk ? { risk: { level: state.risk.level, reasons: state.risk.reasons } } : {}) }, controller.signal);
       attempt.result = result; attempt.finishedAt = Date.now(); attempt.after = await repositorySnapshot(config.repoRoot);
       if (attempt.after.head !== before.head || (stage !== "build" && digest(attempt.after) !== digest(before))) {
         await save(store, state, options); return invalidate(store, state, "Agent modified read-only stage or Git HEAD", options);
@@ -226,11 +237,17 @@ async function drive(store: StateStore, state: RunState, config: ProjectConfig, 
       state.expected = attempt.after;
       if (result.status !== "succeeded" || !result.payload) {
         await save(store, state, options);
+        if (invalidRubric(result)) continue; // an unanswered rubric invalidates only this review; rerun it
         return change(store, state, result.status === "cancelled" ? "cancelled" : "failed", result.error ?? result.status, options);
       }
       attempt.valid = true;
       if (stage === "build") { state.validation = null; state.acceptance = null; for (const old of state.attempts.slice(0, -1)) if (old.stage !== "define") old.valid = false; }
-      const reviewRequiresChanges = stage === "review" && (result.payload.verdict === "needs_changes" || result.payload.findings?.some(f => f.severity === "critical" || f.severity === "important"));
+      const reviewRequiresChanges = stage === "review" && (result.payload.verdict === "needs_changes" || result.payload.findings?.some(f => f.severity === "critical" || f.severity === "important") || rubricBlocks(result.payload).length > 0);
+      if (stage !== "build") state.risk = runRisk(state, verification?.diff);
+      // A reviewer that finds high risk in the diff hands acceptance to the other provider.
+      if (stage === "review" && !reviewRequiresChanges && result.payload.verdict === "success" && state.risk?.level === "high" && result.provider === buildProvider(state, config)) {
+        await save(store, state, options); continue;
+      }
       if (stage === "review" && config.checks.length) {
         state.acceptance = await evaluateAcceptance(state.task, state.checks ?? [], result, acceptanceContext(store, state, config));
         if (!state.acceptance.accepted && result.payload.verdict === "success" && !reviewRequiresChanges) {

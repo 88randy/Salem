@@ -12,6 +12,7 @@ if (task.stage === 'build') {
   writeFileSync('sum.mjs', `export function sum(a, b) {\n  return a ${builds === 1 ? '-' : '+'} b;\n}\n`);
 }
 const payload = { schemaVersion: 1, stage: task.stage, taskId: task.id, verdict: 'success', summary: 'Fixture stage; actual checks decide acceptance', evidenceRefs: ['sum.mjs'], findings: [] };
+if (task.stage === 'review') Object.assign(payload, { rubric: Object.fromEntries(['solves', 'correct', 'secure', 'tested', 'understandable', 'style'].map(k => [k, { pass: true, notes: '' }])), risk: { level: 'normal', reasons: [] } });
 writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify(payload));
 console.log(JSON.stringify({ type: 'thread.started', thread_id: randomUUID() }));
 console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 5, cached_input_tokens: 0 } }));

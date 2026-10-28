@@ -12,6 +12,7 @@ import { buildVerificationContext } from "./review-context.js";
 import { deliver } from "./delivery.js";
 import { usageBudgetReason } from "./metrics.js";
 import { redact } from "./process.js";
+import { runRisk, crossProviderReviewer, buildProvider, singleProviderQuestion, invalidRubric, rubricBlocks } from "./review-policy.js";
 
 // Reproducible baseline: explicit stage/check/review loop, no durable continuation
 // or resume API. It uses the same tools and acceptance as the supervisor.
@@ -38,7 +39,8 @@ export async function runDirectTask(task: TaskSpec, config: ProjectConfig, optio
     return usageBudgetReason(state,config.supervisor!.maxReportedTokens);
   };
   const context=():AcceptanceContext=>({config,snapshot:state.expected,fingerprint:runFingerprint(state),evidenceRoot:join(store.directory(id),"checks"),
-    implementationSessionId:[...state.attempts].reverse().find(a=>a.stage==="build")?.result?.sessionId??null,toolHashes:state.checkToolHashes??{}});
+    implementationSessionId:[...state.attempts].reverse().find(a=>a.stage==="build")?.result?.sessionId??null,toolHashes:state.checkToolHashes??{},
+    implementationProvider:[...state.attempts].reverse().find(a=>a.stage==="build")?.result?.provider??null,risk:state.risk??null});
   try {
     await checkpoint();
     try {
@@ -53,15 +55,21 @@ export async function runDirectTask(task: TaskSpec, config: ProjectConfig, optio
       if(digest(before)!==digest(state.expected))return change("blocked","Worktree changed outside direct workflow");
       const verification=stage==="review"||(stage==="build"&&state.checks!.length)
         ?await buildVerificationContext(config,before,runFingerprint(state),state.checks??[],controller.signal,leaseDir):undefined;
-      const attempt:RunState["attempts"][number]={id:randomUUID(),stage,agentId:config.supervisor.roles[stage],startedAt:Date.now(),finishedAt:null,before,after:null,artifactDir:"",result:null,valid:false};
+      let agentId=config.supervisor.roles[stage];
+      if(stage==="review"){
+        state.risk=runRisk(state,verification?.diff);
+        if(state.risk.level==="high"){const reviewer=await crossProviderReviewer(config,buildProvider(state,config),controller.signal,leaseDir);if(!reviewer)return change("blocked",singleProviderQuestion(state.risk));agentId=reviewer;}
+      }
+      const attempt:RunState["attempts"][number]={id:randomUUID(),stage,agentId,startedAt:Date.now(),finishedAt:null,before,after:null,artifactDir:"",result:null,valid:false};
       attempt.artifactDir=join(store.directory(id),"stages",attempt.id);state.attempts.push(attempt);
       await checkpoint(); // measurement intent, not a resumable continuation
       attempt.result=await runStage({config:{...config,budgets:{...config.budgets,stageTimeoutMs:Math.max(1,Math.min(config.budgets.stageTimeoutMs,state.deadlineAt-Date.now()))}},
-        stage,agentId:attempt.agentId,task,artifactDir:attempt.artifactDir,leaseDir,priorStages:state.attempts.flatMap(a=>a.result?[a.result]:[]),...(verification?{verification}:{})},controller.signal);
+        stage,agentId:attempt.agentId,task,artifactDir:attempt.artifactDir,leaseDir,priorStages:state.attempts.flatMap(a=>a.result?[a.result]:[]),...(verification?{verification}:{}),...(stage==="review"&&state.risk?{risk:{level:state.risk.level,reasons:state.risk.reasons}}:{})},controller.signal);
       attempt.finishedAt=Date.now();attempt.after=await repositorySnapshot(config.repoRoot);
       if(before.head!==attempt.after.head||(stage!=="build"&&digest(before)!==digest(attempt.after)))return change("blocked","Agent modified read-only stage or HEAD");
       state.expected=attempt.after;const result=attempt.result;
       attempt.valid=result.status==="succeeded"&&Boolean(result.payload);await checkpoint();
+      if(invalidRubric(result))continue;
       if(result.status!=="succeeded"||!result.payload)return change(result.status==="cancelled"?"cancelled":"failed",result.error??result.status);
       attempt.valid=true;
       if(result.payload.verdict==="blocked")return change("blocked",result.payload.summary);
@@ -78,8 +86,10 @@ export async function runDirectTask(task: TaskSpec, config: ProjectConfig, optio
         if(!checks.accepted){if(checks.retryable){stage="build";continue;}return change("blocked",checks.reasons.join("; "));}
         stage="review";continue;
       }
-      const changes=result.payload.verdict==="needs_changes"||result.payload.findings?.some(f=>f.severity!=="minor");
+      const changes=result.payload.verdict==="needs_changes"||result.payload.findings?.some(f=>f.severity!=="minor")||rubricBlocks(result.payload).length>0;
       if(changes){stage="build";continue;}
+      state.risk=runRisk(state,verification?.diff);
+      if(state.risk.level==="high"&&result.provider===buildProvider(state,config))continue;
       state.acceptance=await evaluateAcceptance(task,state.checks??[],result,context());
       if(!state.acceptance.accepted)return change("blocked",state.acceptance.reasons.join("; "));
       const stopAfterReview=budget();if(stopAfterReview)return change(stopAfterReview==="cancelled"?"cancelled":"blocked",stopAfterReview);

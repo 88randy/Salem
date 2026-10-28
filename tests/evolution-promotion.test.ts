@@ -9,10 +9,10 @@ import {EvolutionManager} from '../src/local/evolution.js';
 import {localGit} from '../src/local/git.js';
 
 const before='export function sum(a,b){return a-b;}\n',after='export function sum(a,b){return a+b;}\n';
-async function fixture(sourceFails=false){
+async function fixture(sourceFails=false,mode='repair'){
  const root=await mkdtemp(join(tmpdir(),'salem promotion ')),store=new LocalStore(join(root,'data')),{project,task}=await createLocalDemo(store);
  const config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};
- config.agents={codex:{provider:'codex',command:[process.execPath,resolve('tests/fixtures/evolution-agent.mjs'),'codex','repair']}};config.supervisor!.roles={define:'codex',build:'codex',review:'codex'};
+ config.agents={codex:{provider:'codex',command:[process.execPath,resolve('tests/fixtures/evolution-agent.mjs'),'codex',mode]}};config.supervisor!.roles={define:'codex',build:'codex',review:'codex'};
  if(sourceFails){const checker=join(config.repoRoot,'.salem-check.mjs');await writeFile(checker,(await readFile(checker,'utf8'))+`\nif(process.cwd()===${JSON.stringify(config.repoRoot)})process.exit(7);\n`);await localGit(config.repoRoot,['add','.salem-check.mjs'],store.root);await localGit(config.repoRoot,['-c','user.name=Demo','-c','user.email=demo@example.invalid','commit','-m','Environment-specific check fixture'],store.root);}
  const p=await store.saveProject({...project,config}),m=new EvolutionManager(store);await m.initialize();return {store,project:p,task,m,file:join(config.repoRoot,'sum.mjs')};
 }
@@ -43,4 +43,16 @@ test('rollback preserves later user edits and permits retry only after the confl
 });
 test('restart restores an interrupted journal and never repeats application or inference',async()=>{
  const f=await fixture();try{const e=await start(f,true);assert.equal(e.promotion?.status,'applied');await f.m.shutdown();await f.store.patchEvolution(e.id,{promotion:{...e.promotion,status:'applying'}} as any);f.m=new EvolutionManager(f.store,{autoStart:false});await f.m.initialize();const recovered=await f.m.detail(e.id) as any;assert.equal(recovered.promotion.status,'rolled_back');assert.equal(await readFile(f.file,'utf8'),before);assert.equal(recovered.inferenceAttempts,3);}finally{await f.m.shutdown();}
+});
+test('a high-risk repair reviewed by the same provider is neither accepted nor applied',async()=>{
+ const f=await fixture(false,'risky');try{const e=await start(f,true);
+ assert.notEqual(e.status,'improved');assert.notEqual(e.acceptance?.accepted,true);assert.equal(e.promotion??null,null);assert.equal(e.seal??null,null);
+ assert.match(e.reason,/IA distinta de la que lo hizo.*\?$/);assert.equal(await readFile(f.file,'utf8'),before);
+ }finally{await f.m.shutdown();}
+});
+test('promotion refuses a high-risk candidate whose review came from the implementing provider',async()=>{
+ const f=await fixture();try{const e=await start(f);assert.equal(e.status,'improved',e.reason);
+ const risky=await f.store.patchEvolution(e.id,{diff:'diff --git a/auth/permissions.mjs b/auth/permissions.mjs\n+export const canEdit = () => true;\n'+e.diff});
+ await assert.rejects(apply(f,risky),/IA distinta/i);assert.equal(await readFile(f.file,'utf8'),before);
+ }finally{await f.m.shutdown();}
 });

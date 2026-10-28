@@ -37,7 +37,13 @@ export interface StagePayload {
   verdict: "success" | "needs_changes" | "blocked";
   summary: string; evidenceRefs: string[];
   findings?: { severity: "critical" | "important" | "minor"; description: string }[];
+  /** Required from new reviews; absent in results recorded before the rubric existed. */
+  rubric?: Record<RubricItem, { pass: boolean; notes: string }> | null;
+  risk?: RiskAssessment | null;
 }
+export type RubricItem = "solves" | "correct" | "secure" | "tested" | "understandable" | "style";
+export interface RiskAssessment { level: "normal" | "high"; reasons: string[] }
+export interface DependencyReceipt { name: string; ecosystem: "npm" | "pypi"; status: "found" | "not_found" | "unknown"; registry: string }
 export interface Usage {
   inputTokens: number | null; outputTokens: number | null; cachedInputTokens: number | null;
   costUsd: number | null; costKind: "reported" | "estimated" | "unavailable";
@@ -51,6 +57,7 @@ export interface StageInput {
   disableHooks?: boolean;
   priorStages?: Pick<StageResult, "stage" | "payload" | "artifactDir">[];
   verification?: VerificationContext;
+  risk?: RiskAssessment;
   predecessorEvidence?: AcceptedPredecessorEvidence[];
 }
 export interface AcceptedPredecessorEvidence {
@@ -86,6 +93,7 @@ export interface RunState {
   deliveryJournal?: import("./delivery-contracts.js").DeliveryJournal;
   deliveryToolsHash?: string;
   telemetry?: import("./metrics-contracts.js").RunTelemetry;
+  risk?: RiskAssessment & { explanation: string } | null;
   history: { at: number; status: RunStatus; reason: string | null }[];
 }
 export interface StageResult {
@@ -95,5 +103,7 @@ export interface StageResult {
   exitCode: number | null; usage: Usage; durationMs: number; artifactDir: string;
   repoSha: string | null;
   verificationFingerprint?: string;
+  /** Registry receipts for packages the reviewed change adds. */
+  dependencies?: DependencyReceipt[];
   failureKind?: "infrastructure" | "protocol" | "policy" | "unknown" | null;
 }
