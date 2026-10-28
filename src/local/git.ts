@@ -33,7 +33,9 @@ async function neutralConversions(root:string,systemDir:string,scratch:string):P
 async function refuseConversionDrift(root:string,systemDir:string):Promise<void>{
  const info=resolve(root,await localGit(root,["rev-parse","--git-path","info/attributes"],systemDir));
  const converted=await localGit(root,["config","--local","--name-only","--get-regexp","^core\\.(autocrlf|eol|checkroundtripencoding)$"],systemDir,{allowMissing:true});
- if(converted||await stat(info).then(()=>true,()=>false))throw localError("La copia tiene atributos o reglas de conversión Git añadidos después de aceptar; no se exporta un cambio que podría no coincidir con el resultado aceptado.",409);
+ // An ignored .gitattributes is invisible to the acceptance snapshot but still steers conversion (ident, eol, encoding).
+ const hidden=await localGit(root,["ls-files","-z","--others","--ignored","--exclude-standard","--",":(glob)**/.gitattributes"],systemDir);
+ if(converted||hidden||await stat(info).then(()=>true,()=>false))throw localError("La copia tiene atributos o reglas de conversión Git añadidos después de aceptar; no se exporta un cambio que podría no coincidir con el resultado aceptado.",409);
 }
 
 type IndexGit=(args:string[],extra?:{input?:string;maxOutputBytes?:number})=>Promise<string>;
