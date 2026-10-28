@@ -61,6 +61,18 @@ git apply --3way salem-1a2b3c4d.patch
 
 El parche no aplica la redacción de secretos del diff en pantalla, porque alteraría su contenido: revísalo antes de compartirlo. Si supera 2 MB, la descarga se rechaza con un error claro; en ese caso recupera el cambio desde la ruta de la copia aislada. Si la copia aislada ya no existe, la descarga responde que no está disponible. El parche solo se genera si la copia sigue siendo exactamente el resultado aceptado (misma identidad Git e instantánea del repositorio, antes y después de exportar); si alguien la modificó después de la revisión, la descarga se rechaza para no entregar cambios sin revisar. Su forma no depende de tu configuración de Git (`diff.context`, `diff.noprefix`, `GIT_DIFF_OPTS`): siempre usa tres líneas de contexto y prefijos `a/` y `b/`. Tampoco la alteran marcas del índice (`assume-unchanged`, `skip-worktree`), filtros `clean`/`process` de cualquier nivel de configuración ni `core.attributesFile`; si la copia tiene `info/attributes` o reglas de conversión de fin de línea añadidas después de aceptar, la descarga se rechaza.
 
+### Crear una rama local con el cambio aceptado
+
+Si prefieres no aplicar el parche a mano, **Crear rama** (junto a **Descargar parche**) crea una rama nueva en el repositorio del proyecto con exactamente el árbol aceptado: un commit cuyo padre es `sourceSha` y cuyo contenido es el mismo que exporta el parche (binarios, eliminaciones, carpetas nuevas y modos incluidos). Puedes escribir el nombre o dejarlo vacío para usar `salem/<objetivo>-<id corto de la ejecución>`. La API equivalente es `POST /api/executions/<id>/branch` con `{ "name"?: "..." }`, que responde `201` con `{ ref, commit }`.
+
+- **Qué cambia en tu repositorio:** solo se añaden los objetos del commit (`git fetch` desde la copia aislada, sin `FETCH_HEAD`, etiquetas ni submódulos) y se crea la referencia nueva. Tu `HEAD`, índice, archivos, stash y demás ramas no cambian, así que funciona aunque tengas cambios sin commit o un merge o rebase a medias. No se hace checkout: cámbiate a la rama cuando quieras (`git switch <rama>`). No se ejecutan hooks en tu repositorio ni se firma el commit.
+- **Nunca sobrescribe:** la rama se crea de forma atómica solo si no existe. Si ya existe, incluso por una carrera con otro proceso, responde `409` y no toca nada; elige otro nombre. Cada ejecución crea una sola rama; un segundo intento responde `409` con la rama ya creada.
+- **Identidad:** autor y committer salen de `user.name` y `user.email` de la configuración Git de tu repositorio (local, global o del sistema). Si faltan, responde `409` con los comandos `git config` para configurarlos. El mensaje del commit nombra el objetivo, la tarea y la ejecución.
+- **Nombre:** se valida con `git check-ref-format --branch`; se rechazan con `400` los nombres con espacios, `..`, `@{`, guion inicial o prefijo `refs/`.
+- **Mismas garantías que el parche:** solo para ejecuciones aceptadas cuya copia aislada sigue siendo exactamente el resultado aceptado (`409` si cambió, `410` si ya no existe). La rama creada y su commit quedan registrados en la ejecución y se muestran en la pestaña **Entrega**.
+
+Publicar la rama, abrir un PR o integrarla sigue siendo un paso tuyo o del flujo de entrega delegado.
+
 ## Límites actuales
 
 El coordinador ejecuta una tarea a la vez por conversación, incluso si algunos nodos del plan son independientes. Las referencias adjuntas son texto UTF-8: hasta ocho archivos, 40.000 caracteres por archivo y 100.000 en total. Las imágenes y archivos binarios no se admiten como referencias del chat.

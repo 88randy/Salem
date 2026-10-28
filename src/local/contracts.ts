@@ -34,6 +34,8 @@ export interface ExecutionRecord {
   workspace: string | null; sourceSha: string | null; runId: string | null;
   stateDir: string; setupMs: number | null; preparationLogs: string[];
   baseExecutionId?: string;
+  /** Local branch created in the user's repository from the accepted result (absent in older records). */
+  branch?: { ref: string; commit: string; createdAt: number };
 }
 export interface LocalState {
   schemaVersion: 1 | 2; revision: number;

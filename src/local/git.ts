@@ -31,12 +31,27 @@ async function neutralConversions(root:string,systemDir:string,scratch:string):P
  }
  return overrides;
 }
+/** Salem never creates these in a copy; they could convert accepted bytes in ways the acceptance check cannot see. */
+async function refuseConversionDrift(root:string,systemDir:string):Promise<void>{
+ const info=resolve(root,await localGit(root,["rev-parse","--git-path","info/attributes"],systemDir));
+ // --show-scope also reports config.worktree (extensions.worktreeConfig), which --local would miss.
+ const converted=(await localGit(root,["config","--show-scope","--name-only","--get-regexp","^core\\.(autocrlf|eol|checkroundtripencoding)$"],systemDir,{allowMissing:true}))
+  .split(/\r?\n/).some(line=>/^(?:local|worktree)\t/.test(line));
+ // An ignored .gitattributes is invisible to the acceptance snapshot but still steers conversion (ident, eol, encoding).
+ const hidden=await localGit(root,["ls-files","-z","--others","--ignored","--exclude-standard","--",":(glob)**/.gitattributes"],systemDir);
+ if(converted||hidden||await stat(info).then(()=>true,()=>false))throw localError("La copia tiene atributos o reglas de conversión Git añadidos después de aceptar; no se exporta un cambio que podría no coincidir con el resultado aceptado.",409);
+}
 
-export async function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
- const directory=await mkdtemp(join(systemDir,"diff-index-")),options={indexFile:join(directory,"index"),env:{...shape.env,GIT_ALLOW_PROTOCOL:""}};
+type IndexGit=(args:string[],extra?:{input?:string;maxOutputBytes?:number;raw?:boolean})=>Promise<string>;
+/**
+ * Runs fn against a private copy of the work tree's index with every work-tree file added, so the diff,
+ * the patch and the branch commit all see the same tree. The real index is never written.
+ */
+async function withWorkTreeIndex<T>(root:string,systemDir:string,intentOnly:boolean,env:Record<string,string>|undefined,fn:(git:IndexGit)=>Promise<T>):Promise<T>{
+ const directory=await mkdtemp(join(systemDir,"diff-index-")),options={indexFile:join(directory,"index"),env:{...env,GIT_ALLOW_PROTOCOL:""}};
  try{
   const neutral=await neutralConversions(root,systemDir,directory);
-  const git=(args:string[],extra:{input?:string;maxOutputBytes?:number;raw?:boolean}={})=>localGit(root,["-c","core.splitIndex=false",...neutral,...args],systemDir,{...options,...extra});
+  const git:IndexGit=(args,extra={})=>localGit(root,["-c","core.splitIndex=false",...neutral,...args],systemDir,{...options,...extra});
   // Rebuild the temporary index from the real index's entries (mode, object, stage, path): staged membership and
   // modes survive (the index holds the executable bit where core.fileMode is false, and tracked additions now covered
   // by ignore rules), while its stat cache, assume-unchanged/skip-worktree flags and extensions do not, so Git rehashes
@@ -46,13 +61,18 @@ export async function localDiff(root:string,sourceSha:string,systemDir:string,sh
    const entries=await localGit(root,["-c","core.splitIndex=false",...neutral,"ls-files","--stage","-z"],systemDir,{env:options.env,maxOutputBytes:INDEX_LISTING_LIMIT,raw:true});
    if(entries)await git(["update-index","-z","--index-info"],{input:entries.endsWith("\0")?entries:`${entries}\0`});
   }else await git(["read-tree","HEAD"]);
-  await git(["add","--intent-to-add","--all","--"]);
+  await git(["add",...(intentOnly?["--intent-to-add"]:[]),"--all","--"]);
   // An embedded repository becomes a gitlink: the patch would carry a bare reference and lose its files.
   if((await git(["ls-files","--stage","-z"],{maxOutputBytes:INDEX_LISTING_LIMIT,raw:true})).split("\0").some(entry=>entry.startsWith("160000 ")))
    throw localError("La copia contiene un repositorio Git dentro de otro; su contenido no se puede incluir en el cambio exportado.",409);
-  return await git([...(shape.config??[]).flatMap(entry=>["-c",entry]),"diff","--no-ext-diff","--no-textconv",...(shape.args??[]),sourceSha,"--"]);
+  return await fn(git);
  }finally{await rm(directory,{recursive:true,force:true});}
 }
+export async function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
+ return withWorkTreeIndex(root,systemDir,true,shape.env,git=>git([...(shape.config??[]).flatMap(entry=>["-c",entry]),"diff","--no-ext-diff","--no-textconv",...(shape.args??[]),sourceSha,"--"]));
+}
+/** Tree object of the work tree exactly as localPatch exports it; writes only blobs and trees to the object store. */
+export async function localTree(root:string,systemDir:string):Promise<string>{await refuseConversionDrift(root,systemDir);return withWorkTreeIndex(root,systemDir,false,undefined,git=>git(["write-tree"]));}
 
 /**
  * Binary-safe patch of the work tree (untracked, non-ignored files included) against sourceSha.
@@ -62,14 +82,7 @@ export async function localDiff(root:string,sourceSha:string,systemDir:string,sh
 const PATCH_CONFIG=["diff.context=3","diff.interHunkContext=0","diff.noprefix=false","diff.mnemonicPrefix=false","diff.suppressBlankEmpty=false","diff.relative=false","color.diff=false"];
 const PATCH_ARGS=["--binary","--full-index","--unified=3","--inter-hunk-context=0","--no-color","--no-relative","--src-prefix=a/","--dst-prefix=b/"];
 export async function localPatch(root:string,sourceSha:string,systemDir:string):Promise<Buffer>{
- // Salem never creates these in a copy; they could convert accepted bytes in ways the acceptance check cannot see.
- const info=resolve(root,await localGit(root,["rev-parse","--git-path","info/attributes"],systemDir));
- // --show-scope also reports config.worktree (extensions.worktreeConfig), which --local would miss.
- const converted=(await localGit(root,["config","--show-scope","--name-only","--get-regexp","^core\\.(autocrlf|eol|checkroundtripencoding)$"],systemDir,{allowMissing:true}))
-  .split(/\r?\n/).some(line=>/^(?:local|worktree)\t/.test(line));
- // An ignored .gitattributes is invisible to the acceptance snapshot but still steers conversion (ident, eol, encoding).
- const hidden=await localGit(root,["ls-files","-z","--others","--ignored","--exclude-standard","--",":(glob)**/.gitattributes"],systemDir);
- if(converted||hidden||await stat(info).then(()=>true,()=>false))throw localError("La copia tiene atributos o reglas de conversión Git añadidos después de aceptar; no se exporta un parche que podría no coincidir con el resultado aceptado.",409);
+ await refuseConversionDrift(root,systemDir);
  const directory=await mkdtemp(join(systemDir,"patch-")),file=join(directory,"accepted.patch");
  try{
   await localDiff(root,sourceSha,systemDir,{config:PATCH_CONFIG,args:[...PATCH_ARGS,`--output=${file}`],env:{GIT_DIFF_OPTS:""}});

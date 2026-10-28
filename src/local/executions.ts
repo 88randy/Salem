@@ -11,16 +11,17 @@ import { StateStore,digest } from "../state-store.js";
 import { runProcess, redact } from "../process.js";
 import type { ExecutionDetail, ExecutionRecord, Provider } from "./contracts.js";
 import type { LocalStore } from "./store.js";
-import { localDiff, localGit, localPatch } from "./git.js";
+import { localDiff, localGit, localPatch, localTree } from "./git.js";
 import { localError, localText, uuid } from "./validation.js";
 
 const activeStatuses=new Set(["preparing","running"]);
+const slug=(text:string)=>text.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,40).replace(/-+$/,"")||"cambio";
 function providers(e:ExecutionRecord):Provider[]{return [...new Set(Object.values(e.project.config.supervisor!.roles).map(id=>e.project.config.agents[id]!.provider))];}
 export class ExecutionManager {
  private active=new Map<string,{controller:AbortController;promise:Promise<void>;providers:Provider[]}>();
  private reservation:Promise<unknown>=Promise.resolve();
  private timer:NodeJS.Timeout|undefined;
- private pumping=false;private closed=false;
+ private pumping=false;private closed=false;private branching=new Set<string>();
  constructor(readonly store:LocalStore,private options:{autoStart?:boolean;canStart?:(provider:Provider)=>boolean;additionalActive?:()=>number}={}){}
  activeCount():number{return this.active.size;}
  async initialize():Promise<void>{
@@ -230,19 +231,61 @@ export class ExecutionManager {
   * and after the export, so later edits never leave Salem as if they had been reviewed.
   */
  async patch(id:string):Promise<{name:string;data:Buffer}>{
+  const {e,workspace,sourceSha,unchanged}=await this.acceptedCopy(id,"exportar el parche","se exporta un parche");
+  const data=await localPatch(workspace,sourceSha,this.store.root);await unchanged();
+  if(!data.length)throw localError("La ejecución aceptada no tiene cambios respecto a su commit de origen.",409);
+  return {name:`salem-${e.id.slice(0,8)}.patch`,data};
+ }
+ /** An accepted execution whose copy is still the accepted tree; unchanged() re-checks it after reading from it. */
+ private async acceptedCopy(id:string,action:string,refusal:string):Promise<{e:ExecutionRecord;workspace:string;sourceSha:string;unchanged:()=>Promise<void>}>{
   const e=await this.store.findExecution(id),run=e.status==="completed"&&!this.active.has(e.id)?await this.readRun(e).catch(()=>null):null;
-  if(!run||!summarizeRun(run).accepted||!e.sourceSha)throw localError("Solo se puede exportar el parche de una ejecución aceptada.",409);
+  if(!run||!summarizeRun(run).accepted||!e.sourceSha)throw localError(`Solo se puede ${action} de una ejecución aceptada.`,409);
   if(!e.workspace)throw localError("La ejecución no conserva una copia aislada.",410);
-  try{await this.ownedWorkspace(e.workspace,e.id);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")throw localError("La copia aislada ya no existe; no se puede exportar el parche.",410);throw error;}
-  const changed="La copia aislada ya no coincide con el resultado aceptado (cambió después de la revisión o su entrega no es local); no se exporta un parche sin revisar.";
+  try{await this.ownedWorkspace(e.workspace,e.id);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")throw localError(`La copia aislada ya no existe; no se puede ${action}.`,410);throw error;}
+  const changed=`La copia aislada ya no coincide con el resultado aceptado (cambió después de la revisión o su entrega no es local); no ${refusal} sin revisar.`,workspace=e.workspace;
   let expected:string;
   try{const base=await this.acceptedBase(e.id,{readOnly:true});expected=digest(base.state.expected);}
   catch(error){if((error as {status?:number}).status===404)throw error;throw localError(`${changed} ${redact((error as Error).message)}`,409);}
-  const data=await localPatch(e.workspace,e.sourceSha,this.store.root);
-  const after=await repositorySnapshot(e.workspace,{readOnly:true}).then(digest,()=>null);
-  if(after!==expected)throw localError(changed,409);
-  if(!data.length)throw localError("La ejecución aceptada no tiene cambios respecto a su commit de origen.",409);
-  return {name:`salem-${e.id.slice(0,8)}.patch`,data};
+  return {e,workspace,sourceSha:e.sourceSha,unchanged:async()=>{if(await repositorySnapshot(workspace,{readOnly:true}).then(digest,()=>null)!==expected)throw localError(changed,409);}};
+ }
+ /**
+  * Creates refs/heads/<name> in the user's repository: a commit of the accepted tree whose parent is sourceSha.
+  * Only objects and that new ref reach the repository (fetch, then update-ref with an empty old value so an existing
+  * ref is never overwritten); HEAD, index, work tree, stash and other refs stay as they were and no hook runs there.
+  */
+ async branch(id:string,name?:string):Promise<{ref:string;commit:string}>{
+  if(name!==undefined&&(typeof name!=="string"||!name||name.length>200||name.startsWith("-")||name.startsWith("refs/")||name.includes("..")||name.includes("@{")||/[\s\\~^:?*[\x00-\x1f\x7f]/.test(name)))throw localError("Nombre de rama inválido: usa letras, números, '/', '-', '_' o '.', sin espacios, sin '..' y sin prefijo refs/.",400);
+  const current=await this.store.findExecution(id);
+  if(current.branch)throw localError(`Esta ejecución ya creó la rama ${current.branch.ref} (commit ${current.branch.commit.slice(0,12)}); no se crea otra.`,409);
+  if(this.branching.has(current.id))throw localError("La rama de esta ejecución ya se está creando.",409);
+  this.branching.add(current.id);
+  try{
+   const {e,workspace,sourceSha,unchanged}=await this.acceptedCopy(id,"crear la rama","se crea una rama");
+   const missing=()=>localError("No se encontró el repositorio Git del proyecto; no se creó la rama.",409);
+   const repo=await realpath(e.project.config.repoRoot).catch(()=>{throw missing();}),git=(args:string[],options:{allowMissing?:boolean;env?:Record<string,string>}={})=>localGit(repo,args,this.store.root,options);
+   if(await git(["rev-parse","--show-toplevel"]).then(top=>realpath(top),()=>null)!==repo)throw missing();
+   const goal=await this.goalOf(e),branch=name??`salem/${slug(goal?.objective??e.task.objective)}-${e.id.slice(0,8)}`,ref=`refs/heads/${branch}`;
+   if(await git(["check-ref-format","--branch",branch]).catch(()=>null)!==branch)throw localError(`Nombre de rama inválido: ${branch}.`,400);
+   const [user,email]=await Promise.all(["user.name","user.email"].map(key=>git(["config","--get",key],{allowMissing:true})));
+   if(!user||!email)throw localError('Tu repositorio no tiene identidad Git para el commit de la rama. Configúrala con git config user.name "Tu nombre" y git config user.email "tu@correo" en el repositorio (o con --global) y vuelve a intentarlo.',409);
+   const exists=()=>localError(`La rama ${ref} ya existe en tu repositorio; elige otro nombre. No se modificó.`,409);
+   if(await git(["rev-parse","--verify","--quiet",ref],{allowMissing:true}))throw exists();
+   const env={GIT_AUTHOR_NAME:user,GIT_AUTHOR_EMAIL:email,GIT_COMMITTER_NAME:user,GIT_COMMITTER_EMAIL:email};
+   const tree=await localTree(workspace,this.store.root);await unchanged();
+   const message=`Salem: ${(goal?.objective??e.task.objective).split(/\r?\n/)[0]!.trim().slice(0,72)}\n\nResultado aceptado de la tarea ${e.task.id}.\nEjecución: ${e.id}\n${goal?`Objetivo: ${goal.id}\n`:""}Base: ${sourceSha}\n`;
+   const commit=await localGit(workspace,["commit-tree",tree,"-p",sourceSha,"--no-gpg-sign","-F","-"],this.store.root,{env,input:message});
+   // Objects only: no FETCH_HEAD, tags, submodules or auto-gc in the user's repository.
+   await git(["-c","protocol.version=2","-c","gc.auto=0","-c","maintenance.auto=false","-c","fetch.writeCommitGraph=false","fetch","--quiet","--no-tags","--no-write-fetch-head","--no-recurse-submodules",workspace,commit]);
+   try{await git(["update-ref","-m",`salem: rama del resultado aceptado ${e.id}`,ref,commit,""],{env});}
+   catch(error){if(await git(["rev-parse","--verify","--quiet",ref],{allowMissing:true}))throw exists();throw error;}
+   await this.store.patchExecution(e.id,{branch:{ref,commit,createdAt:Date.now()}});
+   return {ref,commit};
+  }finally{this.branching.delete(current.id);}
+ }
+ private async goalOf(e:ExecutionRecord):Promise<{id:string;objective:string}|null>{
+  const state=await this.store.readState(),step=state.conversations?.find(c=>c.id===e.conversationId)?.steps.find(s=>s.executionId===e.id);
+  const id=step?step.key.split(":")[0]:state.tasks.find(t=>t.id===e.taskId)?.origin?.goalId,goal=state.goals?.find(g=>g.id===id);
+  return goal?{id:goal.id,objective:goal.objective}:null;
  }
  async artifact(id:string,path:string,offset=0):Promise<{text:string;truncated:boolean;nextOffset:number}>{
   await this.store.findExecution(id);localText(path,"ruta del artefacto",2000);
