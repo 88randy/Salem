@@ -11,6 +11,20 @@ export function digest(value: unknown): string {
 }
 // Size budgets must measure this exact text: it is what atomicJson writes.
 export function jsonText(value: unknown): string { return JSON.stringify(value, null, 2); }
+// Windows readers (scanners, indexers, other processes) can briefly hold a file
+// without delete sharing, which makes the atomic rename fail with EPERM/EACCES/
+// EBUSY. Retrying 16 times with backoff min(25*2^n, 250) ms waits about 3.4 s in
+// total. Reviewed for #34: measured holds stay well under 2 s even with the CPU
+// 4x oversubscribed, so the budget is kept; past it the rename error is raised
+// and the previous file stays intact.
+export const RENAME_RETRY_LIMIT = 16;
+export const RENAME_RETRY_MAX_DELAY_MS = 250;
+// Test seam: lets tests observe each failed rename attempt (0-based) so they can
+// synchronize with a real lock collision. Production never sets it; unset, it
+// changes nothing. Observers must not throw.
+type RenameFailureObserver = (attempt: number, error: NodeJS.ErrnoException) => void;
+let renameFailureObserver: RenameFailureObserver | undefined;
+export function observeRenameFailures(observer: RenameFailureObserver | undefined): void { renameFailureObserver = observer; }
 export async function atomicJson(file: string, value: unknown): Promise<void> {
   const text = jsonText(value); // serialize before touching the checkpoint
   await mkdir(dirname(file), { recursive: true });
@@ -18,13 +32,13 @@ export async function atomicJson(file: string, value: unknown): Promise<void> {
   const handle = await open(temp, "wx", 0o600);
   try { await handle.writeFile(text); await handle.sync(); } finally { await handle.close(); }
   try {
-    // Windows readers and scanners can briefly withhold delete sharing. Retry
-    // the same atomic replacement; never unlink the previous durable file.
+    // Retry the same atomic replacement; never unlink the previous durable file.
     for(let attempt=0;;attempt++) {
       try {await rename(temp,file);break;}
       catch(error) {
-        if(process.platform!=="win32"||attempt>=16||!["EPERM","EACCES","EBUSY"].includes((error as NodeJS.ErrnoException).code??""))throw error;
-        await delay(Math.min(25*2**attempt,250));
+        renameFailureObserver?.(attempt,error as NodeJS.ErrnoException);
+        if(process.platform!=="win32"||attempt>=RENAME_RETRY_LIMIT||!["EPERM","EACCES","EBUSY"].includes((error as NodeJS.ErrnoException).code??""))throw error;
+        await delay(Math.min(25*2**attempt,RENAME_RETRY_MAX_DELAY_MS));
       }
     }
     // Windows cannot fsync directories; POSIX can persist the rename as well.
