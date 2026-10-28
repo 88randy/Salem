@@ -10,7 +10,8 @@ import type { ProjectConfig, RepositorySnapshot } from "./contracts.js";
 async function git(root: string, ...args: string[]): Promise<string> {
   const started = Date.now();
   // Reading the index would otherwise run a configured fsmonitor command; the monitor only speeds Git up.
-  const result = await runProcess({ command: ["git", "-c", "core.fsmonitor=false", ...args], cwd: root, timeoutMs: 10000, maxOutputBytes: 2_000_000 });
+  // Replace refs could make Git read different objects than the ones recorded.
+  const result = await runProcess({ command: ["git", "-c", "core.fsmonitor=false", ...args], cwd: root, env: { GIT_NO_REPLACE_OBJECTS: "1" }, timeoutMs: 10000, maxOutputBytes: 2_000_000 });
   if (result.status !== "exited" || result.exitCode !== 0) {
     const operation = redact(["git", ...args].join(" ")).slice(0, 500);
     const cwd = redact(root).slice(0, 500);

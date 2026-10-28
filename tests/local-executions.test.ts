@@ -161,6 +161,9 @@ test("an accepted execution exports a binary-safe patch that rebuilds its tree o
   await writeFile(join(ws,"unreviewed.txt"),"after acceptance\n");await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/ya no coincide con el resultado aceptado/.test(error.message));
   await rm(join(ws,"unreviewed.txt"));await writeFile(join(ws,"context.txt"),"rewritten\n");await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409);
   await writeFile(join(ws,"context.txt"),(await readFile(join(clone,"context.txt"),"utf8")));assert.deepEqual((await m.patch(e.id)).data,patch.data);
+  // A replace ref that maps a source blob to its accepted content would make Git hide that change.
+  const original=await git(ws,"rev-parse",`${done.sourceSha}:context.txt`),accepted=await git(ws,"hash-object","-w","context.txt");
+  await git(ws,"replace",original,accepted);assert.deepEqual((await m.patch(e.id)).data,patch.data);await git(ws,"replace","-d",original);
   // Conversion config added after acceptance must not reshape the accepted bytes: filters from any config level and
   // core.attributesFile are neutralized, and conversion settings Salem never creates in the copy are refused.
   const evil=join(f.root,"evil-filter.mjs"),attributes=join(f.root,"evil.attributes"),slash=(p:string)=>p.replaceAll("\\","/");

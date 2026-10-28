@@ -10,7 +10,7 @@ const INDEX_LISTING_LIMIT=64_000_000;
 export async function localGit(root:string,args:string[],systemDir:string,options:{signal?:AbortSignal;leaseDir?:string;allowMissing?:boolean;indexFile?:string;env?:Record<string,string>;input?:string;maxOutputBytes?:number}={}):Promise<string>{
  const hooks=join(systemDir,"empty-hooks");await mkdir(hooks,{recursive:true});
  const r=await runProcess({command:["git","--no-pager","-c",`core.hooksPath=${hooks}`,"-c","core.fsmonitor=false","-c","core.longpaths=true",...args],cwd:root,
-   env:{GIT_TERMINAL_PROMPT:"0",GIT_NO_LAZY_FETCH:"1",...(options.indexFile?{GIT_INDEX_FILE:options.indexFile}:{}),...options.env},timeoutMs:120000,maxOutputBytes:options.maxOutputBytes??LOCAL_GIT_OUTPUT_LIMIT,...(options.input!==undefined?{input:options.input}:{}),
+   env:{GIT_TERMINAL_PROMPT:"0",GIT_NO_LAZY_FETCH:"1",GIT_NO_REPLACE_OBJECTS:"1",...(options.indexFile?{GIT_INDEX_FILE:options.indexFile}:{}),...options.env},timeoutMs:120000,maxOutputBytes:options.maxOutputBytes??LOCAL_GIT_OUTPUT_LIMIT,...(options.input!==undefined?{input:options.input}:{}),
    ...(options.signal?{signal:options.signal}:{}),...(options.leaseDir?{leaseDir:options.leaseDir}:{})});
  if(options.allowMissing&&r.status==="exited"&&r.exitCode===1)return "";
  if(r.status!=="exited"||r.exitCode!==0)throw localError(r.error||r.stderr.trim()||"No se pudo completar la operación Git local.");
