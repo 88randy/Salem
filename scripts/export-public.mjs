@@ -4,7 +4,7 @@ import {resolve,dirname,relative,isAbsolute,posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 
-const roots=new Set(['README.md','CITATION.cff','LICENSE','THIRD_PARTY_NOTICES.md','CONTRIBUTING.md','SECURITY.md','CHANGELOG.md','.gitignore','.gitattributes','package.json','package-lock.json','tsconfig.json','playwright.config.ts']);
+const roots=new Set(['README.md','CITATION.cff','LICENSE','THIRD_PARTY_NOTICES.md','CONTRIBUTING.md','AGENTS.md','CLAUDE.md','SECURITY.md','CHANGELOG.md','.gitignore','.gitattributes','package.json','package-lock.json','tsconfig.json','playwright.config.ts']);
 const guides=new Set(['SALEM.md','CITATION.md','WINDOWS.md','MODELS.md','CHECKS.md','DELIVERY.md','SUPERVISOR.md','METRICS.md','PROVENANCE.md','CONVERSATIONS.md','RELEASE-0.3.0.md','RELEASE-0.4.0.md','RELEASE-0.5.0.md','RELEASE-0.5.1.md']);
 const directories=new Set(['src','ui','tests','fixtures','templates','evals','profiles','scripts','.github']);
 const excluded=new Set(['scripts/demo-acceptance.mjs','scripts/demo-recovery.mjs']);
