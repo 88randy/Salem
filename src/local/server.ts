@@ -17,7 +17,7 @@ import { discoverProject } from "./discovery.js";
 import { localError, localText, record, uuid } from "./validation.js";
 import type { LocalSettings, ProjectInput, Provider, TaskInput } from "./contracts.js";
 
-export interface LocalExecutionManager extends Partial<Pick<ExecutionManager,'acceptedBase'|'startManaged'|'isActive'|'checkpoint'|'resumeManaged'>> {
+export interface LocalExecutionManager extends Partial<Pick<ExecutionManager,'acceptedBase'|'startManaged'|'isActive'|'checkpoint'|'resumeManaged'|'patch'>> {
   initialize(): Promise<void>;
   start(taskId: string, requestKey: string, baseExecutionId?: string): Promise<unknown>;
   cancel(id: string): Promise<unknown>; resume(id: string): Promise<unknown>;
@@ -163,6 +163,14 @@ export async function startLocalServer(options: LocalServerOptions) {
         if (path === "/api/filesystem/directories") {
           const state = await store.readState();
           json(response, 200, await browseDirectories(parsed.searchParams.get("path") ?? "", options.directoryRoots ?? [homedir(), dataDir, ...state.projects.map(project => project.config.repoRoot)])); return;
+        }
+        const patch = path.match(/^\/api\/executions\/([^/]+)\/patch$/);
+        if (patch) {
+          const id = uuid(patch[1]);
+          if (!manager!.patch) throw localError("La exportación de parches no está disponible.", 503);
+          const { name, data } = await manager!.patch(id);
+          response.statusCode = 200; response.setHeader("Content-Type", "application/octet-stream");
+          response.setHeader("Content-Disposition", `attachment; filename="${name}"`); response.setHeader("Content-Length", data.length); response.end(data); return;
         }
         const execution = path.match(/^\/api\/executions\/([^/]+)(?:\/(artifact))?$/);
         if (execution) {
