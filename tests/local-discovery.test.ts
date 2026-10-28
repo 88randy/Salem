@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { defaultSettings } from "../src/local/contracts.js";
 import { parseProjectConfig } from "../src/config.js";
 import { localGit } from "../src/local/git.js";
+import { isDiscoveryOnly } from "../src/checks.js";
 
 async function fixture() {
  const root=await mkdtemp(join(tmpdir(),"salem discovery ")),repo=join(root,"source"),data=join(root,"data");await mkdir(repo);await mkdir(data);
@@ -33,7 +34,7 @@ test("discovery identifies Python, Rust and Go without invoking their tools",asy
 });
 test("discovery proposes Django checks from root manage.py without running it",async()=>{
  const f=await fixture();await writeFile(join(f.repo,"manage.py"),"from pathlib import Path\nPath('RAN').write_text('bad')\n");await f.commit();const before=await f.git(["status","--porcelain"]),head=await f.git(["rev-parse","HEAD"]),result=await(await discovery())(f.repo,defaultSettings(),"codex",f.data);
- assert.deepEqual(result.stack,["Python","Django"]);assert.deepEqual(result.suggested.config.checks,[{id:"django-check",command:["python","manage.py","check"],required:true,toolFiles:["manage.py"]}]);assert.match(result.warnings.join(" "),/Django/);assert.match(result.warnings.join(" "),/DJANGO_SETTINGS_MODULE/);assert.match(result.warnings.join(" "),/dependenc/i);assert.match(result.warnings.join(" "),/ajust/i);await parseProjectConfig(result.suggested.config);
+ assert.deepEqual(result.stack,["Python","Django"]);assert.deepEqual(result.suggested.config.checks,[{id:"django-check",command:["python","manage.py","check"],required:true,toolFiles:["manage.py"]},{id:"django-migrations",command:["python","manage.py","makemigrations","--check","--dry-run"],required:true,toolFiles:["manage.py"]}]);assert.match(result.warnings.join(" "),/Django/);assert.match(result.warnings.join(" "),/DJANGO_SETTINGS_MODULE/);assert.match(result.warnings.join(" "),/dependenc/i);assert.match(result.warnings.join(" "),/ajust/i);await parseProjectConfig(result.suggested.config);
  await assert.rejects(readFile(join(f.repo,"RAN")),/ENOENT/);assert.equal(result.sourceSha,head);assert.equal(await f.git(["rev-parse","HEAD"]),head);assert.equal(await f.git(["status","--porcelain"]),before);
 });
 for(const [file,content,label] of [
@@ -47,7 +48,7 @@ for(const [file,content,label] of [
 });
 test("discovery combines Django, pytest and every ruff marker without duplicate checks",async()=>{
  const f=await fixture();for(const [file,content] of Object.entries({"manage.py":"raise RuntimeError('must not run')\n","pyproject.toml":"[project]\ndependencies = ['pytest', 'ruff']\n[tool.ruff.lint]\nselect = ['E']\n","requirements.txt":"pytest\nruff\n","ruff.toml":"line-length = 88\n",".ruff.toml":"line-length = 88\n"}))await writeFile(join(f.repo,file),content);await f.commit();const result=await(await discovery())(f.repo,defaultSettings(),"codex",f.data),checks=result.suggested.config.checks;
- assert.deepEqual(result.stack,["Python","Django"]);assert.deepEqual(checks.map(c=>c.id).sort(),["django-check","pytest","ruff"]);assert.equal(new Set(checks.map(c=>c.id)).size,checks.length);assert.deepEqual(checks.find(c=>c.id==="pytest"),{id:"pytest",command:["python","-m","pytest"],required:true,toolFiles:["pyproject.toml"]});assert.deepEqual(checks.find(c=>c.id==="ruff")?.toolFiles,["pyproject.toml","requirements.txt","ruff.toml",".ruff.toml"]);await parseProjectConfig(result.suggested.config);
+ assert.deepEqual(result.stack,["Python","Django"]);assert.deepEqual(checks.map(c=>c.id).sort(),["django-check","django-migrations","pytest","ruff"]);assert.equal(new Set(checks.map(c=>c.id)).size,checks.length);assert.deepEqual(checks.find(c=>c.id==="pytest"),{id:"pytest",command:["python","-m","pytest"],required:true,toolFiles:["pyproject.toml"]});assert.deepEqual(checks.find(c=>c.id==="ruff")?.toolFiles,["pyproject.toml","requirements.txt","ruff.toml",".ruff.toml"]);await parseProjectConfig(result.suggested.config);
 });
 for(const [file,content] of [["pyproject.toml","[project]\ndependencies = ['requests']\n"],["requirements.txt","Django>=5\n"],["setup.py","raise RuntimeError('must not run')\n"]])test(`discovery keeps Python without Django, pytest or ruff for ${file}`,async()=>{
  const f=await fixture();await writeFile(join(f.repo,"README.md"),"# Python\n");await writeFile(join(f.repo,file!),content!);await f.commit();const result=await(await discovery())(f.repo,defaultSettings(),"codex",f.data);assert.deepEqual(result.stack,["Python"]);assert.deepEqual(result.suggested.config.checks,[]);
@@ -82,9 +83,8 @@ test("discovery never runs configured Git clean filters while detecting same-siz
 });
 test("proposed Django checks are executable checks, not discovery-only dry runs",async()=>{
  const f=await fixture();await writeFile(join(f.repo,"manage.py"),"print(1)");await f.commit();const checks=(await(await discovery())(f.repo,defaultSettings(),"codex",f.data)).suggested.config.checks;
- // The check runner classifies any argv containing --dry-run as discovery-only, which can never pass.
- const discoveryOnly=["--dry-run","--collect-only","--listTests","--list-tests","--help","--version"];
- for(const id of ["django-check"])assert.ok(!checks.find(c=>c.id===id)!.command.some(a=>discoveryOnly.includes(a)),id);
+ // The runner never lets a discovery-only (dry-run) argv pass; makemigrations --check --dry-run is its one verifying exception.
+ for(const id of ["django-check","django-migrations"])assert.equal(isDiscoveryOnly(checks.find(c=>c.id===id)!.command),false,id);
 });
 test("the proposed ruff check cannot autofix or report success in fix-only mode",async()=>{
  const f=await fixture();await writeFile(join(f.repo,"ruff.toml"),"fix = true\nfix-only = true\n");await f.commit();const ruff=(await(await discovery())(f.repo,defaultSettings(),"codex",f.data)).suggested.config.checks.find(c=>c.id==="ruff")!;
