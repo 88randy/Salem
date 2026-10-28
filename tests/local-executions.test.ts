@@ -76,6 +76,16 @@ test("snapshots fingerprint files whose names look like secrets",async()=>{
  }finally{await f.m.shutdown();}
 });
 
+test("snapshots cannot be forged by moving bytes between files",async()=>{
+ const f=await diffFixture();
+ try{
+  const {repositorySnapshot}=await import("../src/repository.js");
+  await writeFile(join(f.workspace,"za"),"X");await writeFile(join(f.workspace,"zb"),"Y");const before=await repositorySnapshot(f.workspace,{readOnly:true});
+  await rm(join(f.workspace,"zb"));await writeFile(join(f.workspace,"za"),'X"zb"file:0:Y');const after=await repositorySnapshot(f.workspace,{readOnly:true});
+  assert.notEqual(after.treeHash,before.treeHash);
+ }finally{await f.m.shutdown();}
+});
+
 test("verification and export never start a Git transport, even for a missing object behind a promisor remote",async()=>{
  const f=await diffFixture();
  try{

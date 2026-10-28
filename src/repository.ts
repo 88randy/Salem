@@ -70,8 +70,9 @@ export async function repositorySnapshot(root: string, options: { readOnly?: boo
         bytes += stat.size;
         if (stat.size > 20_000_000 || bytes > 100_000_000) throw new Error("Worktree fingerprint size budget exceeded");
       }
-      if (stat.isSymbolicLink()) hash.update(`link:${await readlink(file)}`);
-      else if (stat.isFile()) { hash.update(`file:${stat.mode & 0o111}:`); hash.update(await readFile(file)); }
+      // Length-prefixed records: without them, bytes could move between a file and the next path's record.
+      if (stat.isSymbolicLink()) { const target = Buffer.from(await readlink(file)); hash.update(`link:${target.length}:`); hash.update(target); }
+      else if (stat.isFile()) { const content = await readFile(file); hash.update(`file:${stat.mode & 0o111}:${content.length}:`); hash.update(content); }
       else if (stat.isDirectory()) {
         hash.update("directory:");
         for (const name of (await readdir(file)).sort()) await hashPath(`${path}/${name}`);
