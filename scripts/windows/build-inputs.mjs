@@ -38,7 +38,7 @@ export async function assertBuildFresh(root){
 }
 export async function sourceSnapshot(root){
  const entries=[];
- for(const folder of ['src','ui','templates','scripts/windows'])for(const name of await filesAt(join(root,folder)))entries.push([`${folder}/${name}`,createHash('sha256').update(await readFile(join(root,folder,name))).digest('hex')]);
+ for(const folder of ['src','ui','templates','scripts/windows','fixtures/cart-quickstart'])for(const name of await filesAt(join(root,folder)))entries.push([`${folder}/${name}`,createHash('sha256').update(await readFile(join(root,folder,name))).digest('hex')]);
  for(const name of ['scripts/build.mjs','scripts/package-windows.mjs','package.json','package-lock.json','tsconfig.json','LICENSE','THIRD_PARTY_NOTICES.md','docs/WINDOWS.md'])entries.push([name,createHash('sha256').update(await readFile(join(root,name))).digest('hex')]);
  return entries;
 }

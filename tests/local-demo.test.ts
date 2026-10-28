@@ -4,8 +4,8 @@ import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {LocalStore} from '../src/local/store.js';
-import {createLocalDemo,planLocalDemo} from '../src/local/demo.js';
-import {demoEstimate,type DemoEstimateReference} from '../src/local/demo-estimate.js';
+import {cartGoal,createLocalDemo,planLocalDemo} from '../src/local/demo.js';
+import {cartEstimate,demoEstimate,type DemoEstimateReference} from '../src/local/demo-estimate.js';
 import {defaultSettings,type AccountView,type Provider} from '../src/local/contracts.js';
 import {startLocalServer} from '../src/local/server.js';
 
@@ -56,8 +56,8 @@ test('demo estimates come only from the reference file',()=>{
  assert.deepEqual(unknown.estimates.map(e=>[e.reference,e.matchesReference]),[[null,false],[null,false]]);
 });
 test('shipped demo reference holds only well-formed measurements',()=>{
- assert.equal(demoEstimate.version,1);
- for(const s of demoEstimate.scenarios){
+ for(const reference of [demoEstimate,cartEstimate])assert.equal(reference.version,1);
+ for(const s of [...demoEstimate.scenarios,...cartEstimate.scenarios]){
   assert.match(s.measuredAt,/^\d{4}-\d{2}-\d{2}$/);assert.match(s.salemVersion,/^\d+\.\d+\.\d+$/);
   for(const p of Object.values(s.providers)){
    assert.ok(p&&p.model&&Number.isSafeInteger(p.runs)&&p.runs>0);
@@ -96,9 +96,18 @@ test('demo HTTP plans from probed accounts and creates only after the plan is co
   assert.equal((await store.readState()).projects.length,0);
   const created=await post('projects/demo',{provider:'claude',roles:plan.roles});assert.equal(created.status,200,await created.clone().text());
   const {project}=await created.json() as any;assert.deepEqual(project.config.supervisor.roles,plan.roles);
+  // The cart quickstart reuses the same confirmation: plan, then create with the confirmed roles.
+  assert.equal((await post('projects/demo/plan',{kind:'otro'})).status,400);
+  const cartPlan=await (await post('projects/demo/plan',{kind:'cart',provider:'codex'})).json() as any;assert.deepEqual(cartPlan.roles,{define:'codex',build:'codex',review:'claude'});
+  assert.equal((await post('projects/demo',{kind:'cart',provider:'codex'})).status,400);assert.equal((await store.readState()).projects.length,1);
+  const cart=await post('projects/demo',{kind:'cart',provider:'codex',roles:cartPlan.roles});assert.equal(cart.status,200,await cart.clone().text());
+  const cartResult=await cart.json() as any;assert.equal(cartResult.goal,cartGoal);assert.equal(cartResult.task,undefined);
+  assert.deepEqual(cartResult.project.config.supervisor.roles,cartPlan.roles);assert.equal(cartResult.project.name,'Ejemplo carrito');
+  assert.equal((await store.readState()).projects.length,2);
   await auth(false,false);
   const none=await post('projects/demo/plan',{});assert.equal(none.status,412);assert.match((await none.json() as any).error,/Cuentas/);
   assert.equal((await post('projects/demo',{roles:{define:'codex',build:'codex',review:'codex'}})).status,412);
-  assert.equal((await store.readState()).projects.length,1);
+  assert.equal((await post('projects/demo',{kind:'cart',roles:{define:'codex',build:'codex',review:'codex'}})).status,412);
+  assert.equal((await store.readState()).projects.length,2);
  }finally{await server.close();await rm(root,{recursive:true,force:true});}
 });

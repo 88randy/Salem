@@ -42,6 +42,18 @@ Estas medidas reducen trabajo repetido, pero no garantizan un consumo fijo. El p
 
 La entrega conversacional es local. El resultado permanece en la última copia aceptada, accesible desde el detalle. Publicar, integrar o desplegar requiere un flujo explícito de entrega con sus capacidades delegadas; iniciar el chat no publica automáticamente.
 
+## Ejemplo guiado: el carrito
+
+El ejemplo del carrito recorre el flujo completo en un repositorio pequeño: investigación, una pregunta de producto, un plan con pasos dependientes, checks, revisión independiente y verificación final. Su contenido está versionado en `fixtures/cart-quickstart/`: `cart.mjs` exporta `subtotal`, `shipping` y `total` sin implementar (importes en centavos enteros) y `checks/` contiene sus verificadores.
+
+1. En **Inicio**, pulsa **Crear ejemplo del carrito**. Como en la demo local, Salem comprueba tus cuentas y muestra qué proveedor define, implementa y revisa. Nada se crea ni consume cuota hasta que confirmas. Aún no hay una medición de referencia de este ejemplo, así que su consumo se muestra como desconocido.
+2. Salem crea el proyecto **Ejemplo carrito** y deja escrito en Inicio el objetivo sugerido: «Completa el carrito de cart.mjs: calcula el subtotal, el costo de envío y el total. Conserva la API y los verificadores existentes.» Pulsa **Investigar**. Si creas el ejemplo otra vez obtienes **Ejemplo carrito 2**, una copia independiente; la anterior y su historial no cambian.
+3. El objetivo no define la política de envío a propósito, así que Salem te la pregunta en el chat. Responde con la política que fijan los verificadores: «Envío de $99 si el subtotal es menor a $999; gratis desde $999. Un carrito vacío no paga envío.»
+4. Con tu respuesta, Salem prepara el plan. Debe tener al menos dos pasos dependientes, por ejemplo subtotal, después envío y después total. El check `api` es requerido en todos los pasos y comprueba que se conserven las exportaciones; `subtotal`, `shipping` y `total` se asocian a los criterios de cada paso, y el último paso debe pasar los cuatro porque el perfil los marca como finales (`"final": true`), sin depender de lo que proponga el plan.
+5. Al terminar, abre **Plan y resultados** → **Revisar resultado aceptado** para ver los cambios y las comprobaciones. Salem aplicará el cambio aceptado al proyecto automáticamente, con opción de deshacer; esta función está en desarrollo ([#50](https://github.com/88randy/Salem/issues/50)). Mientras tanto, y como opción avanzada en **Más opciones**, puedes descargar el cambio como parche.
+
+Si respondes con otra política, el paso de envío no pasa el check `shipping`: Salem se detiene, explica el fallo y conserva el subtotal aceptado. Envía la política correcta en el chat para replantear lo pendiente sobre ese resultado. Si el proveedor agota su cuota a mitad del plan, ocurre lo mismo: el paso en curso se detiene con su evidencia y los pasos aceptados se conservan.
+
 ## Llevar el cambio aceptado a tu repositorio
 
 En el detalle de una ejecución aceptada, **Descargar parche** entrega un archivo `.patch` con todo el cambio respecto al commit de origen de la tarea (`sourceSha`, visible en **Historial**): archivos nuevos, eliminados, binarios, carpetas nuevas y cambios de modo. En una conversación, el resultado aceptado es la ejecución del último paso (**Revisar resultado aceptado**) y su parche ya incluye los pasos anteriores. La descarga no modifica la copia aislada ni tu repositorio; la API equivalente es `GET /api/executions/<id>/patch`.

@@ -49,6 +49,8 @@ for(const file of coreFiles){const contents=await readFile(join(root,'dist','src
 try{await cp(join(root,'dist','src','windows-job-helper.exe'),join(stage,'app','dist','src','windows-job-helper.exe'));}catch(e){if(e.code==='ENOENT')throw new Error('Falta dist/src/windows-job-helper.exe. Ejecuta npm run build en Windows antes de empaquetar.');throw e;}
 await cp(join(root,'web-dist'),join(stage,'app','web-dist'),{recursive:true});
 await cp(join(root,'templates'),join(stage,'app','templates'),{recursive:true});
+// The cart quickstart copies this fixture at runtime (dist/src/local/demo.js resolves ../../../fixtures).
+await cp(join(root,'fixtures','cart-quickstart'),join(stage,'app','fixtures','cart-quickstart'),{recursive:true});
 await writeFile(join(stage,'app','package.json'),JSON.stringify({name:packageJson.name,version:packageJson.version,type:'module',engines:packageJson.engines},null,2));
 await mkdir(join(stage,'windows'));
 for(const name of ['manager.mjs','runtime.mjs','Launch.ps1','Uninstall.ps1'])await cp(join(root,'scripts','windows',name),join(stage,'windows',name));

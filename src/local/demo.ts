@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultAgent, type AccountView, type LocalSettings, type Provider } from "./contracts.js";
 import type { LocalStore } from "./store.js";
 import { localGit } from "./git.js";
@@ -41,4 +42,32 @@ export async function createLocalDemo(store:LocalStore,roles:DemoRoles={define:"
  const criterion="sum(a,b) devuelve la suma de ambos argumentos";
  const task=await store.saveTask({projectId:project.id,spec:{id:"BUG-SUM",objective:"Corrige sum.mjs para que sum(a,b) devuelva la suma de ambos argumentos. Conserva el verificador y las instrucciones.",scope:["sum.mjs"],acceptance:[criterion],references:["AGENTS.md"],acceptanceChecks:{[criterion]:["sum"]}}});
  return {project,task};
+}
+
+// Deliberately silent about the shipping policy, so the conversation has to ask for it.
+export const cartGoal="Completa el carrito de cart.mjs: calcula el subtotal, el costo de envío y el total. Conserva la API y los verificadores existentes.";
+// Resolved from the compiled module (dist/src/local), next to the packaged app's own fixtures folder.
+const cartFixture=fileURLToPath(new URL("../../../fixtures/cart-quickstart/",import.meta.url));
+const cartChecks=["api","subtotal","shipping","total"];
+
+/** Copies the versioned cart fixture into a new repository. Every call creates an independent project; earlier copies are untouched. */
+export async function createLocalCart(store:LocalStore,roles:DemoRoles={define:"codex",build:"codex",review:"codex"}){
+ const id=randomUUID(),root=join(store.root,"demos",id),settings=(await store.readState()).settings;
+ const files=(await readdir(cartFixture,{recursive:true,withFileTypes:true})).filter(e=>!e.isDirectory());
+ if(files.some(e=>!e.isFile()))throw localError("El ejemplo del carrito contiene entradas no admitidas.");
+ await mkdir(root,{recursive:true});
+ for(const e of files){const path=relative(cartFixture,join(e.parentPath,e.name));await mkdir(dirname(join(root,path)),{recursive:true});await writeFile(join(root,path),(await readFile(join(cartFixture,path),"utf8")).replaceAll("\r\n","\n"));}
+ await localGit(root,["init","--template=","-b","demo"],store.root);
+ await localGit(root,["add","--all"],store.root);
+ await localGit(root,["-c","user.name=Salem Demo","-c","user.email=demo@example.invalid","commit","-m","Ejemplo inicial del carrito"],store.root);
+ const taken=new Set((await store.readState()).projects.map(p=>p.name));let name="Ejemplo carrito";for(let n=2;taken.has(name);n++)name=`Ejemplo carrito ${n}`;
+ const project=await store.saveProject({name,baseRef:"HEAD",preparation:[],config:{schemaVersion:1,projectId:`cart-${id.slice(0,8)}`,repoRoot:root,contextFiles:["AGENTS.md"],
+  agents:{codex:defaultAgent("codex",settings),claude:defaultAgent("claude",settings)},
+  // Only the API check is required in every step: intermediate steps cannot pass the checks of later steps yet.
+  // All four are final, so the last task of any generated plan needs them regardless of its own criteria mapping.
+  checks:cartChecks.map(c=>({id:c,command:[process.execPath,`checks/${c}.mjs`],required:c==="api",final:true})),
+  capabilities:{edit:true,commit:true,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:180000,maxOutputBytes:2_000_000},
+  supervisor:{roles:{...roles},runTimeoutMs:600000,maxAttempts:6,maxReportedTokens:500000},
+  delivery:{branchPrefix:"feature/salem-",recovery:"query_only",commit:{message:"feat: carrito del ejemplo",author:{name:"Salem Demo",email:"demo@example.invalid"}}}}});
+ return {project,goal:cartGoal};
 }

@@ -35,6 +35,12 @@ ser no bloqueante si es opcional y no se necesita para cubrir un criterio.
 `--help`, `--collect-only`, `--listTests`, `--list-tests`) no acreditan verificación.
 Un check opcional fallido no cubre criterios; no elimina un required.
 
+`"final": true` marca un check que la última tarea de un plan generado debe
+pasar en todos sus criterios, aunque el plan no lo asocie. Los pasos intermedios
+conservan su aceptación parcial; así, un check opcional en cada paso sigue siendo
+obligatorio para dar el objetivo por terminado. El ejemplo del carrito marca sus
+cuatro checks como finales.
+
 El mapeo declara la intención de cobertura; un proyecto debe configurar pruebas
 que realmente comprueben su requisito. El framework no deduce la semántica de un
 programa arbitrario por su exit code. La revisión debe detectar pruebas debilitadas

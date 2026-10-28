@@ -87,13 +87,14 @@ export async function parseProjectConfig(value: unknown, baseDir = process.cwd()
   if (!Array.isArray(raw.checks)) throw new Error("Invalid checks");
   const ids = new Set<string>();
   const checks: CheckConfig[] = raw.checks.map(v => {
-    const c = object(v, "check", ["id", "command", "required", "mode", "notApplicableReason", "toolFiles"]);
+    const c = object(v, "check", ["id", "command", "required", "final", "mode", "notApplicableReason", "toolFiles"]);
     const id = text(c.id, "check id");
     if (ids.has(id) || typeof c.required !== "boolean") throw new Error("Invalid check id/required");
+    if ("final" in c && typeof c.final !== "boolean") throw new Error("Invalid check final");
     ids.add(id);
     if ("mode" in c && c.mode !== "execute" && c.mode !== "dry_run") throw new Error("Invalid check mode");
     if ("toolFiles" in c && (!Array.isArray(c.toolFiles) || !c.toolFiles.length)) throw new Error("Invalid check toolFiles");
-    return { id, command: command(c.command, "check"), required: c.required, ...(c.mode ? { mode: c.mode as "execute" | "dry_run" } : {}),
+    return { id, command: command(c.command, "check"), required: c.required, ...(c.final === true ? { final: true } : {}), ...(c.mode ?{ mode: c.mode as "execute" | "dry_run" } : {}),
       ...(Array.isArray(c.toolFiles) ? { toolFiles: c.toolFiles.map(v => text(v, "check toolFiles")) } : {}),
       ...("notApplicableReason" in c ? { notApplicableReason: text(c.notApplicableReason, "notApplicableReason") } : {}) };
   });
