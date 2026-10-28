@@ -62,7 +62,7 @@ test('final packaging refuses source newer than compiled output', async () => {
   const root=await mkdtemp(join(testRoot,'build-inputs-'));
   for(const dir of ['src','dist/src','ui','web-dist','templates','scripts/windows'])await mkdir(join(root,dir),{recursive:true});
   for(const name of ['package.json','package-lock.json','tsconfig.json'])await writeFile(join(root,name),'{}');
-  await writeFile(join(root,'scripts/build.mjs'),'// fixture');await writeFile(join(root,'scripts/windows/build-inputs.mjs'),'// fixture');
+  await writeFile(join(root,'scripts/build.mjs'),'// fixture');await writeFile(join(root,'scripts/windows/build-inputs.mjs'),'// fixture');await writeFile(join(root,'scripts/windows/reproducible-pe.mjs'),'// fixture');
   await writeFile(join(root,'src/cli.ts'),'export const fresh = false');
   await writeFile(join(root,'dist/src/cli.js'),'export const fresh = false');
   await writeFile(join(root,'ui/main.tsx'),'// ui');await writeFile(join(root,'web-dist/index.html'),'<html></html>');
