@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkToolHash } from "../src/checks.js";
@@ -37,4 +37,13 @@ test("a tool with an external file input still detects replacement on every call
   const before = await checkToolHash([process.execPath, script], f.config.repoRoot);
   await writeFile(script, "console.log('replacement');\n");
   assert.notEqual(await checkToolHash([process.execPath, script], f.config.repoRoot), before);
+});
+
+test("tools larger than the 100 MB artifact limit are still pinned", async t => {
+  const f = await supervisorFixture();
+  t.after(() => rm(f.dir, { recursive: true, force: true }));
+  // The Linux Node.js binary is larger than the artifact limit; a sparse file stands in for it.
+  const tool = join(f.dir, "large-tool.bin"), handle = await open(tool, "w");
+  try { await handle.truncate(150_000_000); } finally { await handle.close(); }
+  assert.match(await checkToolHash([process.execPath, "-e", "0"], f.config.repoRoot, [tool]), /^[a-f0-9]{64}$/);
 });
