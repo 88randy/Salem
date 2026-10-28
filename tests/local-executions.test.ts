@@ -53,6 +53,19 @@ test("execution detail preserves the index and status with staged, recreated and
  }finally{await f.m.shutdown();}
 });
 
+test("index flags cannot hide changed files from the diff or the exported patch",async()=>{
+ const f=await diffFixture();
+ try{
+  await writeFile(join(f.workspace,"tracked.txt"),"hidden by assume-unchanged\n");await writeFile(join(f.workspace,"removed.txt"),"hidden by skip-worktree\n");
+  await writeFile(join(f.workspace,"visible.txt"),"visible\n");await git(f.workspace,"add","visible.txt");
+  await git(f.workspace,"update-index","--assume-unchanged","tracked.txt");await git(f.workspace,"update-index","--skip-worktree","removed.txt");
+  const index=await readFile(join(f.workspace,".git","index")),{localPatch}=await import("../src/local/git.js");
+  const sha=(await f.store.findExecution(f.e.id)).sourceSha!,detail=await f.m.detail(f.e.id),patch=(await localPatch(f.workspace,sha,f.store.root)).toString("utf8");
+  for(const text of [detail.diff,patch]){assert.match(text,/\+hidden by assume-unchanged/);assert.match(text,/\+hidden by skip-worktree/);assert.match(text,/\+visible/);}
+  assert.deepEqual(await readFile(join(f.workspace,".git","index")),index);
+ }finally{await f.m.shutdown();}
+});
+
 test("execution detail excludes ignored files and renders new binary files without dumping them",async()=>{
  const f=await diffFixture();
  try{
