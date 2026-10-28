@@ -18,7 +18,7 @@
     "salem": "node scripts/start-local.mjs",
     "doctor": "node dist/src/cli.js doctor --config profiles/demo.json",
     "package:windows": "node scripts/package-windows.mjs",
-    "test:distribution": "node --test tests/public-export.test.mjs tests/windows-build-inputs.test.mjs tests/windows-package.test.mjs",
+    "test:distribution": "node --test tests/public-export.test.mjs tests/windows-build-inputs.test.mjs tests/windows-package.test.mjs tests/windows-download.test.mjs",
     "export:public": "node scripts/export-public.mjs"
   },
   "devDependencies": {
