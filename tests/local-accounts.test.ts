@@ -214,7 +214,8 @@ test("account mutation predicate reserves even a login that discovers an existin
   } finally { release(); await manager.close(); await s.close(); }
 });
 test("logout reservation survives a connected cache and close waits for owned logout cleanup", async () => {
-  const s = await setup({ authenticated: true });
+  // Logout is capped at 15 s by the manager; give a slow runner that whole window to reach the gate.
+  const s = await setup({ authenticated: true }, { timeoutMs: 15000 });
   const gate = join(s.dir, "logout-gate");
   await writeFile(s.stateFile, JSON.stringify({ authenticated: true, logoutGate: gate }));
   let logout: Promise<AccountView> | undefined;
@@ -224,7 +225,7 @@ test("logout reservation survives a connected cache and close waits for owned lo
     assert.equal(s.manager.isMutating("codex"), true);
     assert.equal(s.manager.list().find(view => view.provider === "codex")!.connection, "connected");
     let pid: number | undefined;
-    const deadline = Date.now() + 4000;
+    const deadline = Date.now() + 15000;
     while (!pid && Date.now() < deadline) {
       try { pid = Number(await readFile(`${s.stateFile}.logout-pid`, "utf8")); }
       catch { await new Promise(resolve => setTimeout(resolve, 20)); }
@@ -237,24 +238,36 @@ test("logout reservation survives a connected cache and close waits for owned lo
   } finally { await writeFile(gate, "release"); await logout?.catch(() => {}); await s.close(); }
 });
 test("guardian stops its own login process when the Salem parent dies", async () => {
-  const s = await setup();
+  // The slow start and the torn pid write reproduce the loaded-runner flake; readiness must not depend on timing.
+  const s = await setup({ loginDelayMs: 5500, pidWriteGapMs: 500 });
   const moduleUrl = new URL("../src/local/auth-process.js", import.meta.url).href;
+  // The guardian's own timeout must outlast every wait below, so it cannot mask a failed parent-death cleanup.
   const code = `import { startAuthProcess } from ${JSON.stringify(moduleUrl)};
-    await startAuthProcess({ command: ${JSON.stringify([...s.state.settings.commands.codex, "login"])}, cwd: ${JSON.stringify(s.dir)}, timeoutMs: 15000, signal: new AbortController().signal, onOutput() {} });
+    await startAuthProcess({ command: ${JSON.stringify([...s.state.settings.commands.codex, "login"])}, cwd: ${JSON.stringify(s.dir)}, timeoutMs: 120000, signal: new AbortController().signal, onOutput(text) { process.stdout.write(text); } });
     setInterval(() => {}, 1000);`;
-  const parent = spawn(process.execPath, [...process.execArgv, "--input-type=module", "-e", code], { shell: false, windowsHide: true, stdio: "ignore" });
-  const parentClosed = new Promise<void>(resolve => parent.once("close", () => resolve()));
+  const parent = spawn(process.execPath, [...process.execArgv, "--input-type=module", "-e", code], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "", stderr = "";
+  parent.stdout.on("data", chunk => { stdout += chunk; });
+  parent.stderr.on("data", chunk => { stderr += chunk; });
+  const parentClosed = new Promise<string>(resolve => parent.once("close", (code, signal) => resolve(`code=${code} signal=${signal}`)));
   let loginPid: number | undefined;
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   try {
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      try { loginPid = Number(await readFile(`${s.stateFile}.pid`, "utf8")); break; } catch { await new Promise(resolve => setTimeout(resolve, 20)); }
-    }
-    assert.ok(loginPid, "fixture login started in a separate Salem parent");
+    // The fixture prints its prompt only after the pid file is fully written.
+    const ready = await new Promise<string>(resolve => {
+      const timer = setTimeout(() => resolve("timed out after 60000 ms"), 60000);
+      const check = () => { if (stdout.includes("Paste the authorization code here:")) { clearTimeout(timer); resolve("ready"); } };
+      parent.stdout.on("data", check);
+      void parentClosed.then(status => { clearTimeout(timer); resolve(`parent exited before readiness (${status})`); });
+      check();
+    });
+    assert.equal(ready, "ready", `fixture login started in a separate Salem parent; stderr: ${stderr.trim() || "(empty)"}`);
+    const raw = (await readFile(`${s.stateFile}.pid`, "utf8")).trim();
+    assert.match(raw, /^[1-9]\d*$/, "fixture login wrote its pid");
+    loginPid = Number(raw);
     assert.equal(alive(loginPid), true);
     parent.kill();
-    const stopDeadline = Date.now() + 5000;
+    const stopDeadline = Date.now() + 30000;
     while (alive(loginPid) && Date.now() < stopDeadline) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(alive(loginPid), false, "IPC disconnect killed only the owned fixture login");
   } finally {

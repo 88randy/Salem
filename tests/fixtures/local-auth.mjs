@@ -31,6 +31,9 @@ if (args.includes('logout')) {
   console.log('Logged out'); process.exit(0);
 }
 if (args.includes('login')) {
+  // Test-only knobs that reproduce a slow start and a pid file observed before its content lands.
+  if (state.loginDelayMs) await new Promise(resolve => setTimeout(resolve, state.loginDelayMs));
+  if (state.pidWriteGapMs) { await writeFile(`${stateFile}.pid`, ''); await new Promise(resolve => setTimeout(resolve, state.pidWriteGapMs)); }
   await writeFile(`${stateFile}.pid`, String(process.pid));
   console.log('private-access-token-do-not-expose');
   console.log(`\u001b[36mOpen ${state.url ?? (provider === 'codex' ? 'https://auth.openai.com/codex/device' : 'https://claude.ai/oauth/authorize?code=true&client_id=fixture')}\u001b[0m`);
