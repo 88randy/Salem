@@ -16,6 +16,8 @@ npm run test:ui
 
 Para probar con Chrome instalado, configura `PLAYWRIGHT_CHANNEL=chrome`. La interfaz usa el navegador solo en loopback. Para desarrollo interactivo: `npm run salem`.
 
+Las convenciones de código, pruebas, Windows y flujo de trabajo, también para agentes de programación, están en [AGENTS.md](AGENTS.md).
+
 Trabaja en una rama. Incluye una reproducción o una prueba de comportamiento, el cambio mínimo y los resultados de verificación. Distingue pruebas simuladas de inferencias reales. No cambies reglas de aceptación o permisos para que un test pase. Los comandos de agentes y checks son arrays sin shell.
 
 ## Revisión
