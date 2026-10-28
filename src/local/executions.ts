@@ -30,7 +30,9 @@ export class ExecutionManager {
  private reservation:Promise<unknown>=Promise.resolve();
  private timer:NodeJS.Timeout|undefined;
  private pumping=false;private closed=false;private branching=new Set<string>();
- constructor(readonly store:LocalStore,private options:{autoStart?:boolean;canStart?:(provider:Provider)=>boolean;additionalActive?:()=>number}={}){}
+ private branchOps=new Set<Promise<unknown>>();
+ // beforeBranchFetch is a test seam to hold a branch creation in flight.
+ constructor(readonly store:LocalStore,private options:{autoStart?:boolean;canStart?:(provider:Provider)=>boolean;additionalActive?:()=>number;beforeBranchFetch?:()=>Promise<void>}={}){}
  activeCount():number{return this.active.size;}
  async initialize():Promise<void>{
   const state=await this.store.readState();
@@ -264,6 +266,12 @@ export class ExecutionManager {
   * ref is never overwritten); HEAD, index, work tree, stash and other refs stay as they were and no hook runs there.
   */
  async branch(id:string,name?:string):Promise<{ref:string;commit:string}>{
+  // Shutdown waits for creations in flight, so no second manager can start one for the same execution meanwhile.
+  if(this.closed)throw localError("Salem se está cerrando; vuelve a intentarlo al reiniciar.",409);
+  const op=this.createBranch(id,name);this.branchOps.add(op);
+  try{return await op;}finally{this.branchOps.delete(op);}
+ }
+ private async createBranch(id:string,name?:string):Promise<{ref:string;commit:string}>{
   if(name!==undefined&&(typeof name!=="string"||!name||name.length>200||name.startsWith("-")||name.startsWith("refs/")||name.includes("..")||name.includes("@{")||/[\s\\~^:?*[\x00-\x1f\x7f]/.test(name)))throw localError("Nombre de rama inválido: usa letras, números, '/', '-', '_' o '.', sin espacios, sin '..' y sin prefijo refs/.",400);
   const current=await this.store.findExecution(id),pending=current.branch?.pending?current.branch:null;
   if(current.branch&&!pending)throw localError(`Esta ejecución ya creó la rama ${current.branch.ref} (commit ${current.branch.commit.slice(0,12)}); no se crea otra.`,409);
@@ -284,9 +292,10 @@ export class ExecutionManager {
    const message=`Salem: ${(goal?.objective??e.task.objective).split(/\r?\n/)[0]!.trim().slice(0,72)}\n\nResultado aceptado de la tarea ${e.task.id}.\nEjecución: ${e.id}\n${goal?`Objetivo: ${goal.id}\n`:""}Base: ${sourceSha}\n`;
    const commit=await localGit(workspace,["commit-tree",tree,"-p",sourceSha,"--no-gpg-sign","-F","-"],this.store.root,{env,input:message});
    // Objects only (no FETCH_HEAD, tags, submodules or auto-gc), over the file protocol alone: url.*.insteadOf in the
-   // user's config could otherwise turn the copy's path into ext::. Command-line config overrides the repository's
-   // command hooks and reaches the local upload-pack too.
-   await git([...["protocol.allow=never","protocol.file.allow=always","protocol.version=2","core.alternateRefsCommand=","uploadpack.packObjectsHook=","core.fsmonitor=false","gc.auto=0","maintenance.auto=false","fetch.writeCommitGraph=false"].flatMap(entry=>["-c",entry]),
+   // user's config could otherwise turn the copy's path into ext::. The repository's alternateRefsCommand is blanked;
+   // uploadpack.packObjectsHook comes only from the user's own global/system config, which they control.
+   await this.options.beforeBranchFetch?.();
+   await git([...["protocol.allow=never","protocol.file.allow=always","protocol.version=2","core.alternateRefsCommand=","core.fsmonitor=false","gc.auto=0","maintenance.auto=false","fetch.writeCommitGraph=false"].flatMap(entry=>["-c",entry]),
     "fetch","--quiet","--no-tags","--no-write-fetch-head","--no-recurse-submodules",workspace,commit],{env:{GIT_ALLOW_PROTOCOL:"file"}});
    // The intent is durable before the ref exists, so a crash or failed write below is settled on retry or startup.
    await this.store.patchExecution(e.id,{branch:{ref,commit,createdAt:Date.now(),pending:true}});
@@ -323,5 +332,5 @@ export class ExecutionManager {
   const actual=await realpath(target);if(!isInside(root,actual)||!(/\.(?:json|log|txt|md)$/.test(actual)))throw localError("Artefacto fuera del espacio permitido.",403);
   const handle=await open(actual,"r");try{const info=await handle.stat();if(!info.isFile())throw localError("Artefacto inválido.");const buffer=Buffer.alloc(65536),{bytesRead}=await handle.read(buffer,0,buffer.length,offset);return {text:redact(buffer.subarray(0,bytesRead).toString("utf8")),truncated:offset+bytesRead<info.size,nextOffset:offset+bytesRead};}finally{await handle.close();}
  }
- async shutdown():Promise<void>{this.closed=true;if(this.timer)clearInterval(this.timer);for(const item of this.active.values())item.controller.abort();await Promise.allSettled([...this.active.values()].map(v=>v.promise));}
+ async shutdown():Promise<void>{this.closed=true;if(this.timer)clearInterval(this.timer);for(const item of this.active.values())item.controller.abort();await Promise.allSettled([...[...this.active.values()].map(v=>v.promise),...this.branchOps]);}
 }

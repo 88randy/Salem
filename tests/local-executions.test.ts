@@ -354,6 +354,25 @@ test("branch creation ignores hostile repository config, never follows a symboli
   await assert.rejects(m.branch(e.id),(error:Error&{status?:number})=>error.status===409&&error.message.includes(ref));
  }finally{await m.shutdown();}
 });
+test("shutdown waits for an in-flight branch creation and a new manager sees its receipt",async()=>{
+ const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await f.store.saveProject({...project,config});
+ const repo=project.config.repoRoot;let reached=false,release=()=>{};const gate=new Promise<void>(resolve=>{release=resolve;});
+ const m=new Manager(f.store,{beforeBranchFetch:async()=>{reached=true;await gate;}});await m.initialize();
+ try{
+  const e=await m.start(task.id,"shutdown-branch");const done=await until(async()=>{const r=await f.store.findExecution(e.id);return ["completed","failed","blocked"].includes(r.status)?r:undefined;});assert.equal(done.status,"completed",done.reason??"");
+  await git(repo,"config","user.name","Repo Owner");await git(repo,"config","user.email","owner@example.invalid");
+  const inFlight=m.branch(e.id,"salem/shutdown");await until(async()=>reached||undefined);
+  let closed=false;const closing=m.shutdown().then(()=>{closed=true;});
+  await new Promise(resolve=>setTimeout(resolve,300));assert.equal(closed,false,"shutdown resolved while a branch was being created");
+  await assert.rejects(m.branch(e.id,"salem/otra"),(error:Error&{status?:number})=>error.status===409&&/cerrando/.test(error.message));
+  release();const created=await inFlight;await closing;
+  assert.deepEqual((await f.store.findExecution(e.id)).branch,{ref:"refs/heads/salem/shutdown",commit:created.commit,createdAt:(await f.store.findExecution(e.id)).branch!.createdAt});
+  assert.equal(await git(repo,"rev-parse","refs/heads/salem/shutdown"),created.commit);
+  const next=new Manager(f.store,{autoStart:false});await next.initialize();
+  try{await assert.rejects(next.branch(e.id,"salem/segunda"),(error:Error&{status?:number})=>error.status===409&&error.message.includes(created.ref));}finally{await next.shutdown();}
+  assert.equal(await git(repo,"for-each-ref","refs/heads/salem/segunda"),"");
+ }finally{release();await m.shutdown();}
+});
 test("startup finishes a pending branch receipt whose ref already points at its commit",async()=>{
  const f=await diffFixture();
  try{
