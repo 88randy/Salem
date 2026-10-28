@@ -155,3 +155,22 @@ test('accepted executions create a local branch once and show it in the delivery
  await page.getByRole('button',{name:'Entrega',exact:true}).click();const receipt=page.locator('.facts').filter({hasText:'Rama local'});
  await expect(receipt).toContainText('refs/heads/salem/mi-cambio');await expect(receipt).toContainText(commit);
 });
+test('a pending branch receipt is completed with the same name instead of creating another branch',async({page})=>{
+ const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'demo',repoRoot:'C:/demo',contextFiles:[],agents:{builder:{provider:'codex',command:['codex']}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
+ const spec={id:'DEMO-1',objective:'Corregir suma',scope:['sum.js'],acceptance:['Suma correcta'],references:[]},commit='d'.repeat(40),ref='refs/heads/salem/pendiente';
+ const accepted:Record<string,unknown>={id:'11111111-1111-4111-8111-111111111111',status:'completed',revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,reason:null,project,task:spec,workspace:'C:/worktree',sourceSha:'abc123',runId:'run-1',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[],branch:{ref,commit,createdAt:3,pending:true}};
+ const state={schemaVersion:1,revision:1,settings,projects:[project],tasks:[],executions:[accepted]},sent:unknown[]=[];
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(u.pathname==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/state')return r.fulfill({json:{state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname===`/api/executions/${accepted.id}/branch`){sent.push(r.request().postDataJSON());accepted.branch={ref,commit,createdAt:3};return r.fulfill({status:201,json:{ref,commit}});}
+  if(u.pathname===`/api/executions/${accepted.id}`)return r.fulfill({json:{execution:accepted,diff:'',artifacts:[],metrics:{accepted:true},run:{id:'run-1',status:'completed',attempts:[],history:[],checks:[],acceptance:{accepted:true,reasons:[],checkIds:[]},validation:null,delivery:null,deliveryJournal:null}}});
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();
+ await page.locator('.list-row').filter({hasText:'DEMO-1'}).getByRole('button',{name:'Ver ejecución'}).click();
+ await expect(page.getByRole('button',{name:'Crear rama',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Entrega',exact:true}).click();await expect(page.locator('.facts').filter({hasText:'Rama local'})).toContainText('Pendiente de confirmar');
+ await page.getByRole('button',{name:'Completar rama',exact:true}).click();await expect(page.getByRole('status')).toContainText('Rama salem/pendiente creada');
+ expect(sent).toEqual([{}]);await expect(page.getByRole('button',{name:'Completar rama',exact:true})).toHaveCount(0);
+ await expect(page.locator('.facts').filter({hasText:'Rama local'})).not.toContainText('Pendiente');
+});

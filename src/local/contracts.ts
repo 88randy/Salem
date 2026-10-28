@@ -34,8 +34,11 @@ export interface ExecutionRecord {
   workspace: string | null; sourceSha: string | null; runId: string | null;
   stateDir: string; setupMs: number | null; preparationLogs: string[];
   baseExecutionId?: string;
-  /** Local branch created in the user's repository from the accepted result (absent in older records). */
-  branch?: { ref: string; commit: string; createdAt: number };
+  /**
+   * Local branch created in the user's repository from the accepted result (absent in older records).
+   * pending marks the intent written before update-ref; it is settled on retry or startup.
+   */
+  branch?: { ref: string; commit: string; createdAt: number; pending?: true } | undefined;
 }
 export interface LocalState {
   schemaVersion: 1 | 2; revision: number;

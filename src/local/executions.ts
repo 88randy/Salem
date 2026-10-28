@@ -16,6 +16,14 @@ import { localError, localText, uuid } from "./validation.js";
 
 const activeStatuses=new Set(["preparing","running"]);
 const slug=(text:string)=>text.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,40).replace(/-+$/,"")||"cambio";
+/**
+ * What a ref holds without following it: "symbolic" for any symbolic ref (even dangling, which update-ref would
+ * follow, or replace with --no-deref and an empty old value), its object id, or null when absent.
+ */
+async function refTarget(git:(args:string[],options?:{allowMissing?:boolean})=>Promise<string>,ref:string):Promise<string|null>{
+ if(await git(["symbolic-ref","-q",ref],{allowMissing:true}))return "symbolic";
+ return await git(["rev-parse","--verify","--quiet",ref],{allowMissing:true})||null;
+}
 function providers(e:ExecutionRecord):Provider[]{return [...new Set(Object.values(e.project.config.supervisor!.roles).map(id=>e.project.config.agents[id]!.provider))];}
 export class ExecutionManager {
  private active=new Map<string,{controller:AbortController;promise:Promise<void>;providers:Provider[]}>();
@@ -27,6 +35,8 @@ export class ExecutionManager {
  async initialize():Promise<void>{
   const state=await this.store.readState();
   for(const e of state.executions)if(activeStatuses.has(e.status))await this.store.patchExecution(e.id,{status:"interrupted",reason:"Salem se cerró antes de confirmar el resultado. Reanuda para reconciliar el checkpoint; no se repiten acciones automáticamente."});
+  // Best effort: a branch created just before a crash gets its receipt; anything else waits for an explicit retry.
+  for(const e of state.executions)if(e.branch?.pending)await this.settleBranch(e,e.branch).catch(()=>null);
   if(this.options.autoStart!==false){this.timer=setInterval(()=>this.wake(),1000);this.timer.unref();this.wake();}
  }
  private serialized<T>(fn:()=>Promise<T>):Promise<T>{const next=this.reservation.then(fn);this.reservation=next.catch(()=>{});return next;}
@@ -255,32 +265,50 @@ export class ExecutionManager {
   */
  async branch(id:string,name?:string):Promise<{ref:string;commit:string}>{
   if(name!==undefined&&(typeof name!=="string"||!name||name.length>200||name.startsWith("-")||name.startsWith("refs/")||name.includes("..")||name.includes("@{")||/[\s\\~^:?*[\x00-\x1f\x7f]/.test(name)))throw localError("Nombre de rama inválido: usa letras, números, '/', '-', '_' o '.', sin espacios, sin '..' y sin prefijo refs/.",400);
-  const current=await this.store.findExecution(id);
-  if(current.branch)throw localError(`Esta ejecución ya creó la rama ${current.branch.ref} (commit ${current.branch.commit.slice(0,12)}); no se crea otra.`,409);
+  const current=await this.store.findExecution(id),pending=current.branch?.pending?current.branch:null;
+  if(current.branch&&!pending)throw localError(`Esta ejecución ya creó la rama ${current.branch.ref} (commit ${current.branch.commit.slice(0,12)}); no se crea otra.`,409);
+  if(pending&&name!==undefined&&`refs/heads/${name}`!==pending.ref)throw localError(`Esta ejecución tiene pendiente de confirmar la rama ${pending.ref}; reintenta sin cambiar el nombre para completarla.`,409);
   if(this.branching.has(current.id))throw localError("La rama de esta ejecución ya se está creando.",409);
   this.branching.add(current.id);
   try{
-   const {e,workspace,sourceSha,unchanged}=await this.acceptedCopy(id,"crear la rama","se crea una rama");
-   const missing=()=>localError("No se encontró el repositorio Git del proyecto; no se creó la rama.",409);
-   const repo=await realpath(e.project.config.repoRoot).catch(()=>{throw missing();}),git=(args:string[],options:{allowMissing?:boolean;env?:Record<string,string>}={})=>localGit(repo,args,this.store.root,options);
-   if(await git(["rev-parse","--show-toplevel"]).then(top=>realpath(top),()=>null)!==repo)throw missing();
-   const goal=await this.goalOf(e),branch=name??`salem/${slug(goal?.objective??e.task.objective)}-${e.id.slice(0,8)}`,ref=`refs/heads/${branch}`;
+   if(pending){const settled=await this.settleBranch(current,pending);if(settled)return settled;}
+   const {e,workspace,sourceSha,unchanged}=await this.acceptedCopy(id,"crear la rama","se crea una rama"),git=await this.userGit(e);
+   const goal=await this.goalOf(e),branch=pending?pending.ref.slice("refs/heads/".length):name??`salem/${slug(goal?.objective??e.task.objective)}-${e.id.slice(0,8)}`,ref=`refs/heads/${branch}`;
    if(await git(["check-ref-format","--branch",branch]).catch(()=>null)!==branch)throw localError(`Nombre de rama inválido: ${branch}.`,400);
    const [user,email]=await Promise.all(["user.name","user.email"].map(key=>git(["config","--get",key],{allowMissing:true})));
    if(!user||!email)throw localError('Tu repositorio no tiene identidad Git para el commit de la rama. Configúrala con git config user.name "Tu nombre" y git config user.email "tu@correo" en el repositorio (o con --global) y vuelve a intentarlo.',409);
    const exists=()=>localError(`La rama ${ref} ya existe en tu repositorio; elige otro nombre. No se modificó.`,409);
-   if(await git(["rev-parse","--verify","--quiet",ref],{allowMissing:true}))throw exists();
+   if(await refTarget(git,ref)!==null)throw exists();
    const env={GIT_AUTHOR_NAME:user,GIT_AUTHOR_EMAIL:email,GIT_COMMITTER_NAME:user,GIT_COMMITTER_EMAIL:email};
    const tree=await localTree(workspace,this.store.root);await unchanged();
    const message=`Salem: ${(goal?.objective??e.task.objective).split(/\r?\n/)[0]!.trim().slice(0,72)}\n\nResultado aceptado de la tarea ${e.task.id}.\nEjecución: ${e.id}\n${goal?`Objetivo: ${goal.id}\n`:""}Base: ${sourceSha}\n`;
    const commit=await localGit(workspace,["commit-tree",tree,"-p",sourceSha,"--no-gpg-sign","-F","-"],this.store.root,{env,input:message});
-   // Objects only: no FETCH_HEAD, tags, submodules or auto-gc in the user's repository.
-   await git(["-c","protocol.version=2","-c","gc.auto=0","-c","maintenance.auto=false","-c","fetch.writeCommitGraph=false","fetch","--quiet","--no-tags","--no-write-fetch-head","--no-recurse-submodules",workspace,commit]);
-   try{await git(["update-ref","-m",`salem: rama del resultado aceptado ${e.id}`,ref,commit,""],{env});}
-   catch(error){if(await git(["rev-parse","--verify","--quiet",ref],{allowMissing:true}))throw exists();throw error;}
-   await this.store.patchExecution(e.id,{branch:{ref,commit,createdAt:Date.now()}});
+   // Objects only (no FETCH_HEAD, tags, submodules or auto-gc), over the file protocol alone: url.*.insteadOf in the
+   // user's config could otherwise turn the copy's path into ext::. Command-line config overrides the repository's
+   // command hooks and reaches the local upload-pack too.
+   await git([...["protocol.allow=never","protocol.file.allow=always","protocol.version=2","core.alternateRefsCommand=","uploadpack.packObjectsHook=","core.fsmonitor=false","gc.auto=0","maintenance.auto=false","fetch.writeCommitGraph=false"].flatMap(entry=>["-c",entry]),
+    "fetch","--quiet","--no-tags","--no-write-fetch-head","--no-recurse-submodules",workspace,commit],{env:{GIT_ALLOW_PROTOCOL:"file"}});
+   // The intent is durable before the ref exists, so a crash or failed write below is settled on retry or startup.
+   await this.store.patchExecution(e.id,{branch:{ref,commit,createdAt:Date.now(),pending:true}});
+   try{await git(["update-ref","--no-deref","-m",`salem: rama del resultado aceptado ${e.id}`,ref,commit,""],{env});}
+   catch(error){const target=await refTarget(git,ref).catch(()=>null);if(target===commit)throw error;await this.store.patchExecution(e.id,{branch:undefined});if(target!==null)throw exists();throw error;}
+   const receipt={ref,commit,createdAt:Date.now()};await this.store.patchExecution(e.id,{branch:receipt});
    return {ref,commit};
   }finally{this.branching.delete(current.id);}
+ }
+ private async userGit(e:ExecutionRecord):Promise<(args:string[],options?:{allowMissing?:boolean;env?:Record<string,string>})=>Promise<string>>{
+  const missing=()=>localError("No se encontró el repositorio Git del proyecto; no se creó la rama.",409);
+  const repo=await realpath(e.project.config.repoRoot).catch(()=>{throw missing();}),git=(args:string[],options:{allowMissing?:boolean;env?:Record<string,string>}={})=>localGit(repo,args,this.store.root,options);
+  if(await git(["rev-parse","--show-toplevel"]).then(top=>realpath(top),()=>null)!==repo)throw missing();
+  return git;
+ }
+ /** Finishes a pending receipt whose ref already points at its commit; null when the ref is missing and may be created again. */
+ private async settleBranch(e:ExecutionRecord,pending:NonNullable<ExecutionRecord["branch"]>):Promise<{ref:string;commit:string}|null>{
+  const target=await refTarget(await this.userGit(e),pending.ref);
+  if(target===null)return null;
+  if(target!==pending.commit)throw localError(`La rama ${pending.ref} ya existe en tu repositorio con otro contenido; no se modificó ni se registró.`,409);
+  await this.store.patchExecution(e.id,{branch:{ref:pending.ref,commit:pending.commit,createdAt:pending.createdAt}});
+  return {ref:pending.ref,commit:pending.commit};
  }
  private async goalOf(e:ExecutionRecord):Promise<{id:string;objective:string}|null>{
   const state=await this.store.readState(),step=state.conversations?.find(c=>c.id===e.conversationId)?.steps.find(s=>s.executionId===e.id);

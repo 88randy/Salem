@@ -314,6 +314,56 @@ test("an accepted execution creates a new local branch with its exact tree witho
   await rm(ws,{recursive:true,force:true});await f.store.patchExecution(e.id,{branch:undefined} as never);await assert.rejects(m.branch(e.id),(error:Error&{status?:number})=>error.status===410);
  }finally{await m.shutdown();}
 });
+test("branch creation ignores hostile repository config, never follows a symbolic ref and recovers an unrecorded branch",async()=>{
+ const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await f.store.saveProject({...project,config});
+ const repo=project.config.repoRoot,m=new Manager(f.store);await m.initialize();
+ try{
+  const e=await m.start(task.id,"hostile");const done=await until(async()=>{const r=await f.store.findExecution(e.id);return ["completed","failed","blocked"].includes(r.status)?r:undefined;});assert.equal(done.status,"completed",done.reason??"");
+  await git(repo,"config","user.name","Repo Owner");await git(repo,"config","user.email","owner@example.invalid");
+  const sentinel=join(f.root,"sentinel.txt"),script=join(f.root,"sentinel.mjs"),ran=()=>readFile(sentinel).then(()=>true,()=>false);
+  await writeFile(script,`import {appendFileSync} from "node:fs";appendFileSync(${JSON.stringify(sentinel)},"ran\\n");`);
+  // insteadOf rewrites the copy's path to ext::, which would run a command if any protocol but file were allowed.
+  const ext=(text:string)=>text.replaceAll("%","%%").replaceAll(" ","% ");
+  await git(repo,"config",`url.ext::${ext(process.execPath)} ${ext(script)}.insteadOf`,done.workspace!);await git(repo,"config","protocol.ext.allow","always");
+  await assert.rejects(m.branch(e.id,"salem/ext"));assert.equal(await ran(),false,"ext:: command ran");
+  assert.equal((await f.store.findExecution(e.id)).branch,undefined);assert.equal(await git(repo,"for-each-ref","refs/heads/salem/ext"),"");
+  await git(repo,"config","--remove-section",`url.ext::${ext(process.execPath)} ${ext(script)}`);
+  // A dangling symbolic ref at the requested name must not redirect creation to its target.
+  await git(repo,"symbolic-ref","refs/heads/salem/x","refs/heads/other");
+  await assert.rejects(m.branch(e.id,"salem/x"),(error:Error&{status?:number})=>error.status===409);
+  assert.equal(await git(repo,"for-each-ref","refs/heads/other"),"");assert.equal(await git(repo,"symbolic-ref","refs/heads/salem/x"),"refs/heads/other");assert.equal((await f.store.findExecution(e.id)).branch,undefined);
+  // Alternates make fetch ask core.alternateRefsCommand for their refs.
+  const alt=join(f.root,"alt");await mkdir(alt);await git(alt,"init","-q");await writeFile(join(alt,"z.txt"),"z\n");await git(alt,"add","z.txt");await git(alt,"-c","user.name=T","-c","user.email=t@example.invalid","commit","-q","-m","z");
+  await mkdir(join(repo,".git","objects","info"),{recursive:true});await writeFile(join(repo,".git","objects","info","alternates"),join(alt,".git","objects").replaceAll("\\","/")+"\n");
+  await git(repo,"config","core.alternateRefsCommand",`"${process.execPath.replaceAll("\\","/")}" "${script.replaceAll("\\","/")}"; true`);
+  // The receipt write after update-ref fails twice; retries finish the same branch instead of creating another.
+  const original=f.store.patchExecution.bind(f.store);let failures=2;
+  f.store.patchExecution=async(id,patch)=>{if(patch.branch&&!patch.branch.pending&&failures>0){failures--;throw Error("simulated crash after update-ref");}return original(id,patch);};
+  await assert.rejects(m.branch(e.id,"salem/recover"),/simulated crash/);assert.equal(await ran(),false,"alternateRefsCommand ran");
+  const ref="refs/heads/salem/recover",first=(await f.store.findExecution(e.id)).branch!;assert.equal(first.pending,true);assert.equal(first.ref,ref);assert.equal(await git(repo,"rev-parse",ref),first.commit);
+  await assert.rejects(m.branch(e.id,"salem/otra"),(error:Error&{status?:number})=>error.status===409&&error.message.includes(ref));
+  // The ref vanished before the retry: it is created again under the same name.
+  await git(repo,"update-ref","-d",ref);await assert.rejects(m.branch(e.id),/simulated crash/);
+  const second=(await f.store.findExecution(e.id)).branch!;assert.equal(second.pending,true);assert.equal(second.ref,ref);assert.equal(await git(repo,"rev-parse",ref),second.commit);
+  // A ref moved to another commit is never claimed or overwritten.
+  await git(repo,"update-ref",ref,done.sourceSha!);await assert.rejects(m.branch(e.id),(error:Error&{status?:number})=>error.status===409);assert.equal(await git(repo,"rev-parse",ref),done.sourceSha);
+  await git(repo,"update-ref",ref,second.commit);
+  const settled=await m.branch(e.id);assert.deepEqual(settled,{ref,commit:second.commit});
+  const record=(await f.store.findExecution(e.id)).branch!;assert.equal(record.pending,undefined);assert.equal(record.commit,second.commit);
+  assert.equal(await git(repo,"rev-parse",`${second.commit}^`),done.sourceSha);assert.equal(await ran(),false);
+  await assert.rejects(m.branch(e.id),(error:Error&{status?:number})=>error.status===409&&error.message.includes(ref));
+ }finally{await m.shutdown();}
+});
+test("startup finishes a pending branch receipt whose ref already points at its commit",async()=>{
+ const f=await diffFixture();
+ try{
+  const repo=f.workspace,commit=await git(repo,"rev-parse","HEAD"),ref="refs/heads/salem/pending";
+  await f.store.patchExecution(f.e.id,{project:{...f.e.project,config:{...f.e.project.config,repoRoot:repo}},branch:{ref,commit,createdAt:1,pending:true}});
+  await git(repo,"update-ref",ref,commit);
+  const {Manager}=await modules(),reopened=new Manager(f.store,{autoStart:false});await reopened.initialize();
+  assert.deepEqual((await f.store.findExecution(f.e.id)).branch,{ref,commit,createdAt:1});await reopened.shutdown();
+ }finally{await f.m.shutdown();}
+});
 test("branch creation rejects unknown and not accepted executions",async()=>{
  const f=await diffFixture();
  try{
