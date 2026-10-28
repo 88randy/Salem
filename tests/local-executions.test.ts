@@ -164,14 +164,22 @@ test("an accepted execution exports a binary-safe patch that rebuilds its tree o
   // Conversion config added after acceptance must not reshape the accepted bytes: filters from any config level and
   // core.attributesFile are neutralized, and conversion settings Salem never creates in the copy are refused.
   const evil=join(f.root,"evil-filter.mjs"),attributes=join(f.root,"evil.attributes"),slash=(p:string)=>p.replaceAll("\\","/");
-  await writeFile(evil,"process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('FILTERED\\n'));\n");await writeFile(attributes,"*.txt filter=evil\n");
-  await git(ws,"config","--local","filter.evil.clean",`"${slash(process.execPath)}" "${slash(evil)}"`);await git(ws,"config","--local","core.attributesFile",slash(attributes));
+  // The script also leaves a marker: no command configured after acceptance may run during export or its checks.
+  const marker=join(f.root,"evil-ran.txt"),command=`"${slash(process.execPath)}" "${slash(evil)}"`;
+  await writeFile(evil,`import {appendFileSync} from 'node:fs';appendFileSync(${JSON.stringify(marker)},'ran\\n');process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('FILTERED\\n'));\n`);await writeFile(attributes,"*.txt filter=evil\n");
+  await git(ws,"config","--local","filter.evil.clean",command);await git(ws,"config","--local","core.attributesFile",slash(attributes));await git(ws,"config","--local","core.fsmonitor",command);
   assert.deepEqual((await m.patch(e.id)).data,patch.data);
   const info=join(ws,".git","info");await mkdir(info,{recursive:true});await copyFile(attributes,join(info,"attributes"));
   await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión/.test(error.message));
   await rm(join(info,"attributes"));await git(ws,"config","--local","core.autocrlf","true");
   await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión/.test(error.message));
-  for(const key of ["core.autocrlf","core.attributesFile","filter.evil.clean"])await git(ws,"config","--local","--unset",key);
+  for(const key of ["core.autocrlf","core.attributesFile","filter.evil.clean","core.fsmonitor"])await git(ws,"config","--local","--unset",key);
+  assert.deepEqual((await m.patch(e.id)).data,patch.data);
+  await assert.rejects(readFile(marker),{code:"ENOENT"});
+  // An ignored .gitattributes is invisible to the acceptance snapshot, so it must not steer the export either.
+  const hidden=join(ws,"new dir",".gitattributes");await writeFile(join(info,"exclude"),"new dir/.gitattributes\n");await writeFile(hidden,"* ident\n");
+  await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===409&&/atributos|conversión|ya no coincide/.test(error.message));
+  await rm(hidden);await rm(join(info,"exclude"));
   assert.deepEqual((await m.patch(e.id)).data,patch.data);
   assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch)-/.test(name)),false);
   await rm(ws,{recursive:true,force:true});await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===410);
