@@ -15,13 +15,15 @@ export interface CheckOptions {
   onEvidence?: (evidence: CheckEvidence) => Promise<void>;
 }
 function bytesHash(text: string): string { return createHash("sha256").update(text).digest("hex"); }
-async function fileHash(file: string): Promise<string> {
-  const s = await lstat(file); if (!s.isFile() || s.size > 100_000_000) throw new Error("Invalid check artifact");
+// Artifacts stay small; tools (e.g. the ~120 MB Linux node binary) get their own streamed budget.
+const MAX_ARTIFACT_BYTES = 100_000_000, MAX_TOOL_BYTES = 1_000_000_000;
+async function fileHash(file: string, maxBytes = MAX_ARTIFACT_BYTES): Promise<string> {
+  const s = await lstat(file); if (!s.isFile() || s.size > maxBytes) throw new Error(maxBytes === MAX_TOOL_BYTES ? "Check tool is not a regular file within the size budget" : "Invalid check artifact");
   const hash = createHash("sha256"); for await (const chunk of createReadStream(file)) hash.update(chunk); return hash.digest("hex");
 }
 export async function checkToolHash(command: string[], cwd: string, toolFiles?: string[]): Promise<string> {
   const exe = await realpath(await resolveExecutable(command[0]!));
-  const files = [[exe, await fileHash(exe)]];
+  const files = [[exe, await fileHash(exe, MAX_TOOL_BYTES)]];
   const inputs = checkInputs(command, toolFiles);
   const source = new Set(inputs.length ? (await repositoryFiles(cwd)).map(path => resolve(cwd, path)) : []);
   for (const entry of inputs) {
@@ -30,7 +32,7 @@ export async function checkToolHash(command: string[], cwd: string, toolFiles?: 
       const actual = await realpath(file), info = await lstat(file);
       // Only files actually represented by the snapshot can evolve with source.
       if (info.isDirectory()) throw new Error("Directory check input requires explicit file toolFiles");
-      if (!source.has(actual) || actual !== file || info.isSymbolicLink()) files.push([file, actual, await fileHash(actual)]);
+      if (!source.has(actual) || actual !== file || info.isSymbolicLink()) files.push([file, actual, await fileHash(actual, MAX_TOOL_BYTES)]);
     }
     catch (e) { throw new Error(`Unavailable check tool input: ${entry}`, { cause: e }); }
   }

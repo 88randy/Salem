@@ -24,7 +24,7 @@ export class ConversationManager{
  async initialize(){
   for(const c of (await this.store.readState()).conversations??[])if(['planning','working'].includes(c.status)||c.resumeAfterCommandKey!==undefined||c.commands.some(cmd=>!c.handledCommands.includes(cmd.key))){
    await this.store.updateConversation(c.id,v=>{v.status='paused';v.resumeAfterCommandKey=v.commands.at(-1)!.key;v.reason='Salem se reinició. Continúa para reconciliar los resultados guardados; las tareas aceptadas y los mensajes pendientes se conservan.';event(v,`restart:${v.revision}`,v.reason);});
-   if(c.goalId)await this.goals.cancel(c.goalId);
+   if(c.goalId)await this.goals.halt(c.goalId);
    for(const step of c.steps)if(step.executionId)await this.executions.cancel(step.executionId);
   }
   if(this.options.autoStart!==false){this.timer=setInterval(()=>this.wake(),500);this.timer.unref();this.wake();}
@@ -52,7 +52,7 @@ export class ConversationManager{
   for(const c of (await this.store.readState()).conversations??[]){if(this.closed)break;try{await this.reconcile(c.id);}catch(error){const message=redact((error as Error).message);await this.store.updateConversation(c.id,v=>{v.status='blocked';v.reason=message;const pending=v.commands.find(cmd=>!v.handledCommands.includes(cmd.key));if(pending){v.failedCommandKey=pending.key;v.handledCommands.push(pending.key);}event(v,`error:${digest(message)}:${v.planRevision}`,message);});}}
  }).finally(()=>{this.pumping=false;}).catch(()=>{});}
  private async stop(c:ConversationRecord):Promise<boolean>{
-  if(c.goalId){await this.goals.cancel(c.goalId);if(this.goals.isActive(c.goalId))return false;}
+  if(c.goalId){await this.goals.halt(c.goalId);if(this.goals.isActive(c.goalId))return false;}
   for(const step of c.steps)if(step.executionId){await this.executions.cancel(step.executionId);if(this.executions.isActive(step.executionId))return false;}
   // A completion that raced the stop is still a real accepted result.
   for(const step of c.steps.filter(s=>s.executionId&&s.status!=='accepted')){const e=await this.store.findExecution(step.executionId!);if(e.status==='completed')await this.accept(c,step.key,e.id);}
