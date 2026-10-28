@@ -32,7 +32,16 @@ async function neutralConversions(root:string,systemDir:string,scratch:string):P
  return overrides;
 }
 
-export async function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
+// Diffs of one repository run one at a time: each writes the same empty blob (add --intent-to-add), and
+// concurrent writers of one loose object fail on Windows with "Permission denied".
+const diffQueues=new Map<string,Promise<void>>();
+export function localDiff(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}={}):Promise<string>{
+ const key=resolve(root),run=(diffQueues.get(key)??Promise.resolve()).then(()=>diffOnce(root,sourceSha,systemDir,shape));
+ const settled=run.then(()=>{},()=>{});diffQueues.set(key,settled);
+ void settled.then(()=>{if(diffQueues.get(key)===settled)diffQueues.delete(key);});
+ return run;
+}
+async function diffOnce(root:string,sourceSha:string,systemDir:string,shape:{args?:string[];config?:string[];env?:Record<string,string>}):Promise<string>{
  const directory=await mkdtemp(join(systemDir,"diff-index-")),options={indexFile:join(directory,"index"),env:{...shape.env,GIT_ALLOW_PROTOCOL:""}};
  try{
   const neutral=await neutralConversions(root,systemDir,directory);
