@@ -262,6 +262,67 @@ test("an accepted execution exports a binary-safe patch that rebuilds its tree o
   await rm(ws,{recursive:true,force:true});await assert.rejects(m.patch(e.id),(error:Error&{status?:number})=>error.status===410);
  }finally{await m.shutdown();}
 });
+// Everything in the user's repository that branch creation must leave byte-for-byte unchanged.
+async function userRepoState(repo:string,except:string){
+ const refs=(await git(repo,"for-each-ref","--format=%(refname) %(objectname)")).split("\n").filter(line=>!line.startsWith(except+" "));
+ return {refs,head:await readFile(join(repo,".git","HEAD")),index:await readFile(join(repo,".git","index")),status:await git(repo,"--no-optional-locks","status","--porcelain=v1","--untracked-files=all"),stash:await git(repo,"stash","list","--format=%H %gs"),
+  files:await Promise.all(["sum.mjs","context.txt","draft.txt"].map(name=>readFile(join(repo,name)).catch(()=>null))),fetchHead:await readFile(join(repo,".git","FETCH_HEAD")).catch(()=>null)};
+}
+test("an accepted execution creates a new local branch with its exact tree without touching the user's checkout",async()=>{
+ const {Manager,createDemo}=await modules(),f=await fixture(),{project,task}=await createDemo(f.store),config=structuredClone(project.config);delete config.delivery;config.capabilities={edit:true,commit:false,pull_request:false,merge:false,deploy:false};await f.store.saveProject({...project,config});
+ const repo=project.config.repoRoot;await writeFile(join(repo,"patch-fixture.txt"),"remove me\n");await writeFile(join(repo,"context.txt"),Array.from({length:9},(_,i)=>`line ${i+1}\n`).join(""));
+ await git(repo,"add","patch-fixture.txt","context.txt");await git(repo,"-c","user.name=Test","-c","user.email=test@example.invalid","commit","-q","-m","patch fixture");
+ const m=new Manager(f.store);await m.initialize();
+ try{
+  assert.equal(typeof m.branch,"function","branch creation missing");
+  const e=await m.start(task.id,"branch");const done=await until(async()=>{const r=await f.store.findExecution(e.id);return ["completed","failed","blocked"].includes(r.status)?r:undefined;});assert.equal(done.status,"completed",done.reason??"");
+  const ws=done.workspace!,wsStatus=await git(ws,"status","--porcelain=v1","--untracked-files=all"),wsIndex=await readFile(join(ws,".git","index")),patch=await m.patch(e.id);
+  // The user keeps working: another branch checked out, a stash, staged and untracked changes.
+  await git(repo,"switch","-q","-c","work");await writeFile(join(repo,"sum.mjs"),"stashed\n");await git(repo,"stash","push","-q","-m","user stash");
+  await writeFile(join(repo,"context.txt"),"staged by the user\n");await git(repo,"add","context.txt");await writeFile(join(repo,"draft.txt"),"untracked\n");
+  const empty=join(f.root,"empty.gitconfig");await writeFile(empty,"");
+  await withEnv({GIT_CONFIG_GLOBAL:empty},()=>assert.rejects(m.branch(e.id,"salem/sin-identidad"),(error:Error&{status?:number})=>error.status===409&&/git config user\.name/.test(error.message)&&/git config user\.email/.test(error.message)));
+  await git(repo,"config","user.name","Repo Owner");await git(repo,"config","user.email","owner@example.invalid");
+  const before=await userRepoState(repo,"");
+  for(const name of ["refs/heads/x","-x","a..b","con espacio","x.lock","@{-1}","a/","",`x${"y".repeat(300)}`])await assert.rejects(m.branch(e.id,name),(error:Error&{status?:number})=>error.status===400,name);
+  const demo=await git(repo,"rev-parse","refs/heads/demo");
+  await assert.rejects(m.branch(e.id,"demo"),(error:Error&{status?:number})=>error.status===409&&/refs\/heads\/demo/.test(error.message));
+  assert.equal(await git(repo,"rev-parse","refs/heads/demo"),demo);assert.deepEqual(await userRepoState(repo,""),before);
+  // Edits after acceptance were never reviewed.
+  await writeFile(join(ws,"unreviewed.txt"),"after acceptance\n");await assert.rejects(m.branch(e.id),(error:Error&{status?:number})=>error.status===409&&/ya no coincide con el resultado aceptado/.test(error.message));await rm(join(ws,"unreviewed.txt"));
+  const hookLog=join(f.root,"hook-ran.txt");await mkdir(join(repo,".git","hooks"),{recursive:true});await writeFile(join(repo,".git","hooks","reference-transaction"),`#!/bin/sh\necho ran >> '${hookLog.replaceAll("\\","/")}'\n`,{mode:0o755});
+  const created=await withEnv({GIT_AUTHOR_NAME:"Leaked",GIT_COMMITTER_EMAIL:"leaked@example.invalid"},()=>m.branch(e.id));
+  assert.equal(await readFile(hookLog).then(()=>true,()=>false),false,"a hook ran in the user's repository");
+  assert.match(created.ref,/^refs\/heads\/salem\/[a-z0-9-]+-[a-f0-9]{8}$/);assert.ok(created.ref.endsWith(e.id.slice(0,8)));assert.match(created.commit,/^[a-f0-9]{40,64}$/);
+  assert.equal(await git(repo,"rev-parse",created.ref),created.commit);assert.equal(await git(repo,"rev-parse",`${created.commit}^`),done.sourceSha);
+  assert.equal(await git(repo,"rev-parse",`${created.commit}^{tree}`),await workTree(ws));
+  assert.equal(await git(repo,"cat-file","-e",`${created.commit}:patch-fixture.txt`).then(()=>true,()=>false),false);
+  assert.match(await git(repo,"ls-tree",created.commit,"sum.mjs"),/^100755 /);
+  const bin=join(f.root,"asset.bin");await writeFile(bin,Buffer.from(Array.from({length:256},(_,i)=>i).filter(i=>i!==13)));
+  assert.equal(await git(repo,"rev-parse",`${created.commit}:new dir/deep/asset.bin`),await git(repo,"hash-object","--no-filters",bin));
+  assert.equal(await git(repo,"log","-1","--format=%an <%ae>|%cn <%ce>",created.commit),"Repo Owner <owner@example.invalid>|Repo Owner <owner@example.invalid>");
+  assert.match(await git(repo,"log","-1","--format=%B",created.commit),new RegExp(e.id));
+  assert.deepEqual(await userRepoState(repo,created.ref),before);
+  assert.deepEqual(await readFile(join(ws,".git","index")),wsIndex);assert.equal(await git(ws,"status","--porcelain=v1","--untracked-files=all"),wsStatus);assert.equal(await git(ws,"rev-parse","HEAD"),done.sourceSha);
+  assert.deepEqual((await m.patch(e.id)).data,patch.data);
+  const record=(await f.store.findExecution(e.id)).branch;assert.equal(record?.ref,created.ref);assert.equal(record?.commit,created.commit);assert.equal(typeof record?.createdAt,"number");
+  await assert.rejects(m.branch(e.id,"salem/otra"),(error:Error&{status?:number})=>error.status===409&&error.message.includes(created.ref));
+  assert.equal((await readdir(f.store.root)).some(name=>/^(?:diff-index|patch|branch)-/.test(name)),false);
+  // The hook is live: a plain ref update in the user's repository runs it.
+  await git(repo,"update-ref","refs/salem-probe",created.commit);assert.ok(await readFile(hookLog));
+
+  await rm(ws,{recursive:true,force:true});await f.store.patchExecution(e.id,{branch:undefined} as never);await assert.rejects(m.branch(e.id),(error:Error&{status?:number})=>error.status===410);
+ }finally{await m.shutdown();}
+});
+test("branch creation rejects unknown and not accepted executions",async()=>{
+ const f=await diffFixture();
+ try{
+  assert.equal(typeof f.m.branch,"function","branch creation missing");
+  await assert.rejects(f.m.branch(randomUUID()),(error:Error&{status?:number})=>error.status===404);
+  await assert.rejects(f.m.branch(f.e.id),(error:Error&{status?:number})=>error.status===409);
+  await f.store.patchExecution(f.e.id,{status:"completed"});await assert.rejects(f.m.branch(f.e.id),(error:Error&{status?:number})=>error.status===409);
+ }finally{await f.m.shutdown();}
+});
 test("patch generation rejects output over the Git limit and leaves no temporary files",async()=>{
  const f=await diffFixture();
  try{

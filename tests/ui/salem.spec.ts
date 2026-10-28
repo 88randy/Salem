@@ -130,3 +130,28 @@ test('accepted executions download the binary patch and show export errors',asyn
  expect(file.suggestedFilename()).toBe('salem-11111111.patch');expect(Buffer.compare(await readFile((await file.path())!),bytes)).toBe(0);
  await page.getByRole('button',{name:'Descargar parche'}).click();await expect(page.getByText('La copia aislada ya no existe; no se puede exportar el parche.')).toBeVisible();expect(patches).toBe(2);
 });
+test('accepted executions create a local branch once and show it in the delivery receipt',async({page})=>{
+ const project={id:'p',revision:1,name:'Demo local',archived:false,createdAt:1,updatedAt:1,baseRef:'HEAD',preparation:[],config:{schemaVersion:1,projectId:'demo',repoRoot:'C:/demo',contextFiles:[],agents:{builder:{provider:'codex',command:['codex']}},checks:[],capabilities:{edit:true,commit:false,pull_request:false,merge:false,deploy:false},budgets:{stageTimeoutMs:60000,maxOutputBytes:10000}}};
+ const spec={id:'DEMO-1',objective:'Corregir suma',scope:['sum.js'],acceptance:['Suma correcta'],references:[]};
+ const accepted:Record<string,unknown>={id:'11111111-1111-4111-8111-111111111111',status:'completed',revision:1,taskId:'t',projectId:'p',requestKey:'req',createdAt:1,updatedAt:2,finishedAt:2,reason:null,project,task:spec,workspace:'C:/worktree',sourceSha:'abc123',runId:'run-1',stateDir:'C:/Salem/runs/e',setupMs:20,preparationLogs:[]};
+ const state={schemaVersion:1,revision:1,settings,projects:[project],tasks:[],executions:[accepted]},sent:unknown[]=[],commit='c'.repeat(40);
+ const detail=()=>({execution:accepted,diff:'',artifacts:[],metrics:{accepted:true},run:{id:'run-1',status:'completed',attempts:[],history:[],checks:[],acceptance:{accepted:true,reasons:[],checkIds:[]},validation:null,delivery:null,deliveryJournal:null}});
+ await page.route('**/api/**',async r=>{const u=new URL(r.request().url());
+  if(u.pathname==='/api/bootstrap')return r.fulfill({json:{csrfToken:'csrf',state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname==='/api/state')return r.fulfill({json:{state,accounts:[],dataDir:'C:/Salem'}});
+  if(u.pathname===`/api/executions/${accepted.id}/branch`){expect(r.request().method()).toBe('POST');const body=r.request().postDataJSON();sent.push(body);
+   if(sent.length===1)return r.fulfill({status:409,json:{error:'La rama refs/heads/demo ya existe; elige otro nombre. No se modificó.'}});
+   accepted.branch={ref:'refs/heads/'+body.name,commit,createdAt:3};return r.fulfill({status:201,json:{ref:'refs/heads/'+body.name,commit}});}
+  if(u.pathname===`/api/executions/${accepted.id}`)return r.fulfill({json:detail()});
+  return r.fulfill({status:404,json:{error:'Ruta no prevista '+u.pathname}});});
+ await page.goto('/');await page.getByRole('button',{name:'Ejecuciones',exact:true}).click();
+ await page.locator('.list-row').filter({hasText:'DEMO-1'}).getByRole('button',{name:'Ver ejecución'}).click();
+ await page.getByRole('button',{name:'Crear rama',exact:true}).click();
+ const name=page.getByLabel('Nombre de la rama',{exact:true});await expect(name).toBeVisible();await name.fill('demo');
+ await page.getByRole('button',{name:'Crear rama en el repositorio',exact:true}).click();await expect(page.getByText('La rama refs/heads/demo ya existe; elige otro nombre. No se modificó.')).toBeVisible();
+ await name.fill('salem/mi-cambio');await page.getByRole('button',{name:'Crear rama en el repositorio',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('Rama salem/mi-cambio creada');expect(sent).toEqual([{name:'demo'},{name:'salem/mi-cambio'}]);
+ await expect(page.getByRole('button',{name:'Crear rama',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Descargar parche'})).toBeVisible();
+ await page.getByRole('button',{name:'Entrega',exact:true}).click();const receipt=page.locator('.facts').filter({hasText:'Rama local'});
+ await expect(receipt).toContainText('refs/heads/salem/mi-cambio');await expect(receipt).toContainText(commit);
+});
