@@ -33,7 +33,7 @@ test("discovery identifies Python, Rust and Go without invoking their tools",asy
 });
 test("discovery proposes Django checks from root manage.py without running it",async()=>{
  const f=await fixture();await writeFile(join(f.repo,"manage.py"),"from pathlib import Path\nPath('RAN').write_text('bad')\n");await f.commit();const before=await f.git(["status","--porcelain"]),head=await f.git(["rev-parse","HEAD"]),result=await(await discovery())(f.repo,defaultSettings(),"codex",f.data);
- assert.deepEqual(result.stack,["Python","Django"]);assert.deepEqual(result.suggested.config.checks,[{id:"django-check",command:["python","manage.py","check"],required:true,toolFiles:["manage.py"]},{id:"django-migrations",command:["python","manage.py","makemigrations","--check","--dry-run"],required:true,toolFiles:["manage.py"]}]);assert.match(result.warnings.join(" "),/Django/);assert.match(result.warnings.join(" "),/DJANGO_SETTINGS_MODULE/);assert.match(result.warnings.join(" "),/dependenc/i);assert.match(result.warnings.join(" "),/ajust/i);await parseProjectConfig(result.suggested.config);
+ assert.deepEqual(result.stack,["Python","Django"]);assert.deepEqual(result.suggested.config.checks,[{id:"django-check",command:["python","manage.py","check"],required:true,toolFiles:["manage.py"]},{id:"django-migrations",command:["python","manage.py","makemigrations","--check"],required:true,toolFiles:["manage.py"]}]);assert.match(result.warnings.join(" "),/Django/);assert.match(result.warnings.join(" "),/DJANGO_SETTINGS_MODULE/);assert.match(result.warnings.join(" "),/dependenc/i);assert.match(result.warnings.join(" "),/ajust/i);await parseProjectConfig(result.suggested.config);
  await assert.rejects(readFile(join(f.repo,"RAN")),/ENOENT/);assert.equal(result.sourceSha,head);assert.equal(await f.git(["rev-parse","HEAD"]),head);assert.equal(await f.git(["status","--porcelain"]),before);
 });
 for(const [file,content,label] of [
@@ -79,4 +79,10 @@ test("discovery never runs configured Git clean filters while detecting same-siz
  await writeFile(filter,`import{writeFileSync}from'node:fs';writeFileSync(${JSON.stringify(marker)},'ran');for await(const chunk of process.stdin)process.stdout.write(chunk);`);
  await f.git(["config","--local","filter.salem.clean",`"${process.execPath.replaceAll("\\","/")}" "${filter.replaceAll("\\","/")}"`]);await writeFile(join(f.repo,"README.md"),"BBBB\n");
  const result=await(await discovery())(f.repo,defaultSettings(),"codex",f.data);await assert.rejects(readFile(marker),/ENOENT/);assert.match(result.warnings.join(" "),/sin confirmar/);
+});
+test("proposed Django checks are executable checks, not discovery-only dry runs",async()=>{
+ const f=await fixture();await writeFile(join(f.repo,"manage.py"),"print(1)");await f.commit();const checks=(await(await discovery())(f.repo,defaultSettings(),"codex",f.data)).suggested.config.checks;
+ // The check runner classifies any argv containing --dry-run as discovery-only, which can never pass.
+ const discoveryOnly=["--dry-run","--collect-only","--listTests","--list-tests","--help","--version"];
+ for(const id of ["django-check","django-migrations"])assert.ok(!checks.find(c=>c.id===id)!.command.some(a=>discoveryOnly.includes(a)),id);
 });
